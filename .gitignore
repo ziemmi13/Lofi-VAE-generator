@@ -1,3 +1,12 @@
 venv/
 Reports/
 utils/datasets
+utils/midi
+midi/
+Dataset/
+stem_splitter/yt-dlp.exe
+stem_splitter/midi
+stem_splitter/separated
+stem_splitter/wav_files
+Untitled-1.ipynb
+midi_read.py
