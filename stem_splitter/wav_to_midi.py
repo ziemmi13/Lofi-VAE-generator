@@ -12,10 +12,10 @@ def convert_audio_to_midi(wav_files, song_name):
     predict_and_save(audio_path_list=wav_files,
                      output_directory=f"./midi/{song_name}",
                      save_midi=True,
-                     sonify_midi=False,
+                     sonify_midi=True,
                      save_model_outputs=False,
                      save_notes=False,
-                    #  melodia_trick=True,
+                     melodia_trick=True,
                      model_or_model_path=ICASSP_2022_MODEL_PATH
                      )
 
