@@ -10,3 +10,4 @@ stem_splitter/separated
 stem_splitter/wav_files
 Untitled-1.ipynb
 midi_read.py
+model/__pycache__
