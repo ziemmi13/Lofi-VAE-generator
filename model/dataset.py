@@ -1,7 +1,10 @@
 from pretty_midi import PrettyMIDI
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from glob import glob
+from config import *
+from torch.utils.data import random_split
+
 
 class Dataset(Dataset):
     def __init__(self, dataset_dir):
@@ -40,6 +43,16 @@ class Dataset(Dataset):
 
         return pianoroll_tensor 
 
+def setup_datasets_and_dataloaders(dataset_dir):
+    dataset = Dataset(dataset_dir)
+    train_size = int(TRAIN_VALIDATION_SPLIT * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+
+    return train_dataloader, val_dataloader
 
 # dataset = Dataset(dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\Projekt zespolowy\dataset")
 
