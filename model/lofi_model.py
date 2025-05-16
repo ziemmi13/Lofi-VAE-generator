@@ -99,6 +99,3 @@ class Decoder(nn.Module):
         # TODO
         # Use teacher forcing
         return x
-
-
-

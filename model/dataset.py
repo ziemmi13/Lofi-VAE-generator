@@ -40,6 +40,11 @@ class Dataset(Dataset):
         pianoroll = midi_file.get_piano_roll(fs=100) 
         pianoroll = pianoroll[21:109, :]
         pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32)
+        
+        #TODO
+        # Check if changing pianoroll to Spectogram (also has note velocity) will benefit 'human feel'
+        # Also check if dataset supports the idea of Spectogram
+
 
         return pianoroll_tensor 
 
