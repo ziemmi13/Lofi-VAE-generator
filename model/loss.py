@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-def loss(x, x_reconstructed, distribution, z, loss_type):
+def compute_loss(x, x_reconstructed, distribution, z, loss_type):
     # reconstruction loss
     if loss_type == "BCE":
         loss_reconstruction = F.binary_cross_entropy(x_reconstructed, x, reduction='none').sum(-1).mean()

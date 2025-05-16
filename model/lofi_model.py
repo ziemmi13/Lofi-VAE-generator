@@ -73,7 +73,7 @@ class Encoder(nn.Module):
     def __init__(self, input_dim=88, hidden_dim=256, latent_dim=64):
         super(Encoder, self).__init__()
         self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers=2, batch_first=True, bidirectional=True)
-        self.fc1 = nn.Linear(hidden_dim, latent_dim * 2) # 2 * for mean and variance
+        self.fc1 = nn.Linear(hidden_dim*2, latent_dim*2) # 2 * for mean and variance
 
     def forward(self, x):
         x, (h_n, c_n) = self.lstm(x) # x - output features, h_n - hiden state, c_n - final cell state  
@@ -95,7 +95,7 @@ class Decoder(nn.Module):
         x = self.fc1(z)
         x = x.unsqueeze(1).repeat(1, self.seq_len, 1)  # (batch, seq_len, hidden_dim)
         x, (h_n, c_n) = self.lstm(x)
-        x = self.fc2(x)
+        x = torch.sigmoid(self.fc2(x)) # sigmoid used for BCE loss
         # TODO
         # Use teacher forcing
         return x

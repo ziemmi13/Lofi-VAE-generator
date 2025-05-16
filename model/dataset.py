@@ -23,6 +23,16 @@ class Dataset(Dataset):
         # Prepare pianoroll tensor
         pianoroll_tensor = self.prepare_midi_file(midi_file_path)
 
+        max_len = 388
+        if pianoroll_tensor.shape[0] < max_len:
+            pad_len = max_len - pianoroll_tensor.shape[0]
+            pianoroll_tensor = torch.nn.functional.pad(pianoroll_tensor, (0, 0, 0, pad_len))  # pad time axis
+        else:
+            pianoroll_tensor = pianoroll_tensor[:max_len, :]
+        
+        # Rescale for BCE
+        pianoroll_tensor = pianoroll_tensor / 127.0  # skala [0, 1]
+
         return pianoroll_tensor
 
     def prepare_midi_file(self, file_path):
@@ -39,7 +49,7 @@ class Dataset(Dataset):
         # Convert to pianoroll 
         pianoroll = midi_file.get_piano_roll(fs=100) 
         pianoroll = pianoroll[21:109, :]
-        pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32)
+        pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32).T # Transpose to get (time, notes)
         
         #TODO
         # Check if changing pianoroll to Spectogram (also has note velocity) will benefit 'human feel'
@@ -54,11 +64,11 @@ def setup_datasets_and_dataloaders(dataset_dir):
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=1)
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=1)
+    train_dataloader = DataLoader(train_dataset, batch_size=1, shuffle=False,)
+    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     return train_dataloader, val_dataloader
 
-# # Sanity check
+# Sanity check
 dataset = Dataset(dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\Projekt zespolowy\dataset")
 print(dataset[0].shape)
