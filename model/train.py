@@ -3,7 +3,7 @@ from config import *
 from dataset import setup_datasets_and_dataloaders
 from loss import compute_loss
 
-def train(model, dataset_dir, print_info=True):
+def train(model, dataset_dir, print_info=True, model_save_path = "saved_models/lofi-model.pth"):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using {device} device")
     model.to(device)
@@ -24,6 +24,10 @@ def train(model, dataset_dir, print_info=True):
             optimizer.zero_grad()
 
             distribution, z, reconstructed_data = model(data)
+
+            # print(f"{z.shape = }")
+            # print(f"{reconstructed_data.shape = }")
+            # print(f"{data.shape = }")
 
             # Compute loss
             loss, loss_reconstruction, loss_KL = compute_loss(data, reconstructed_data, distribution, z, loss_type = "BCE")
@@ -82,6 +86,13 @@ def train(model, dataset_dir, print_info=True):
         # experiment.log_metric("epoch_val_loss_reconstruction", val_epoch_reconstruction_loss, step=epoch)
         # experiment.log_metric("epoch_val_loss_KL", val_epoch_KL, step=epoch)
 
+    # Saving the trained model
+
+    print("Finished training!")
+    print(f"Saving the model to path: {model_save_path}")
+    torch.save(model.state_dict(), model_save_path)
+
+    print("Model saved!")
 
 
 
