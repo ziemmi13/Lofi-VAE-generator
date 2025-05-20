@@ -4,6 +4,7 @@ from torch.utils.data import Dataset, DataLoader
 from glob import glob
 from config import *
 from torch.utils.data import random_split
+import torch.nn.functional as F
 
 
 class Dataset(Dataset):
@@ -23,40 +24,50 @@ class Dataset(Dataset):
         # Prepare pianoroll tensor
         pianoroll_tensor = self.prepare_midi_file(midi_file_path)
 
-        max_len = 388
-        if pianoroll_tensor.shape[0] < max_len:
-            pad_len = max_len - pianoroll_tensor.shape[0]
-            pianoroll_tensor = torch.nn.functional.pad(pianoroll_tensor, (0, 0, 0, pad_len))  # pad time axis
-        else:
-            pianoroll_tensor = pianoroll_tensor[:max_len, :]
-        
-        # Rescale for BCE
-        pianoroll_tensor = pianoroll_tensor / 127.0  # skala [0, 1]
+        # print(f"{pianoroll_tensor.shape = }")
 
-        return pianoroll_tensor
+        max_len = 128
+        item_len = pianoroll_tensor.shape[1] # shape is (pitch, time)
+        if item_len < max_len:
+            pad_len = max_len - item_len
+            # print(f"{pad_len = }")
+            pianoroll_tensor_ = F.pad(pianoroll_tensor, (0, pad_len), mode='constant', value=0)  # pad time axis
+        else:
+            pianoroll_tensor_ = pianoroll_tensor[:, :128]
+        
+        
+        # # Rescale for BCE
+        pianoroll_tensor_ = pianoroll_tensor_ / 128.0  # Rescale to [0, 1] for BCE
+        pianoroll_tensor_ = torch.clamp(pianoroll_tensor_, 0, 1)
+
+
+        # print(f"{pianoroll_tensor.shape = }")
+
+        return pianoroll_tensor_
 
     def prepare_midi_file(self, file_path):
         """
         Prepares MIDI file to be procesed by the VAE model
         Args:
+            filepath
 
         Returns:
+            torch.Tensor: Tensor representation of the pianoroll
         
         """
         # Load MIDI file
         midi_file = PrettyMIDI(file_path)
 
         # Convert to pianoroll 
-        pianoroll = midi_file.get_piano_roll(fs=100) 
-        pianoroll = pianoroll[21:109, :]
-        pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32).T # Transpose to get (time, notes)
-        
+        pianoroll = midi_file.get_piano_roll(fs=16) 
+        pianoroll = pianoroll[36:128, :]
+        pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32)#.T # Transpose to get (time, notes)
         #TODO
         # Check if changing pianoroll to Spectogram (also has note velocity) will benefit 'human feel'
         # Also check if dataset supports the idea of Spectogram
 
 
-        return pianoroll_tensor 
+        return pianoroll_tensor
 
 def setup_datasets_and_dataloaders(dataset_dir):
     dataset = Dataset(dataset_dir)
@@ -70,5 +81,5 @@ def setup_datasets_and_dataloaders(dataset_dir):
     return train_dataloader, val_dataloader
 
 # Sanity check
-dataset = Dataset(dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\Projekt zespolowy\dataset")
-print(dataset[0].shape)
+# dataset = Dataset(dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\Projekt zespolowy\dataset")
+# print(dataset[0].shape)

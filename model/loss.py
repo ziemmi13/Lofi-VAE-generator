@@ -18,3 +18,5 @@ def compute_loss(x, x_reconstructed, distribution, z, loss_type):
 
     loss = loss_reconstruction + loss_KL
     return loss, loss_reconstruction, loss_KL
+
+

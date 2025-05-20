@@ -70,7 +70,7 @@ class LofiModel(nn.Module):
         return distribution, z, reconstructed_x
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim=88, hidden_dim=256, latent_dim=64):
+    def __init__(self, input_dim=128, hidden_dim=256, latent_dim=64):
         super(Encoder, self).__init__()
         self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers=2, batch_first=True, bidirectional=True)
         self.fc1 = nn.Linear(hidden_dim*2, latent_dim*2) # 2 * for mean and variance
@@ -82,7 +82,7 @@ class Encoder(nn.Module):
         return x
 
 class Decoder(nn.Module):
-    def __init__(self, latent_dim=64, hidden_dim=256, output_dim=88, seq_len=388):
+    def __init__(self, latent_dim=64, hidden_dim=256, output_dim=128, seq_len=92):
         super(Decoder, self).__init__()
         self.seq_len = seq_len
         self.fc1 = nn.Sequential(

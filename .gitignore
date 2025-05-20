@@ -11,3 +11,4 @@ stem_splitter/wav_files
 Untitled-1.ipynb
 midi_read.py
 model/__pycache__
+model/saved_models/
