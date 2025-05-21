@@ -5,7 +5,7 @@ from glob import glob
 from config import *
 from torch.utils.data import random_split
 import torch.nn.functional as F
-
+from music21 import converter
 
 class Dataset(Dataset):
     def __init__(self, dataset_dir):
@@ -26,19 +26,19 @@ class Dataset(Dataset):
 
         # print(f"{pianoroll_tensor.shape = }")
 
-        max_len = 128
+        max_len = MIDI_LEN
         item_len = pianoroll_tensor.shape[1] # shape is (pitch, time)
         if item_len < max_len:
             pad_len = max_len - item_len
             # print(f"{pad_len = }")
             pianoroll_tensor_ = F.pad(pianoroll_tensor, (0, pad_len), mode='constant', value=0)  # pad time axis
         else:
-            pianoroll_tensor_ = pianoroll_tensor[:, :128]
+            pianoroll_tensor_ = pianoroll_tensor[:, :MIDI_LEN]
         
         
         # # Rescale for BCE
-        pianoroll_tensor_ = pianoroll_tensor_ / 128.0  # Rescale to [0, 1] for BCE
-        pianoroll_tensor_ = torch.clamp(pianoroll_tensor_, 0, 1)
+        # pianoroll_tensor_ = pianoroll_tensor_ / 127.0  # Rescale to [0, 1] for BCE (127 is max volume in MIDI)
+        # pianoroll_tensor_ = torch.clamp(pianoroll_tensor_, 0, 1)
 
 
         # print(f"{pianoroll_tensor.shape = }")
@@ -59,15 +59,42 @@ class Dataset(Dataset):
         midi_file = PrettyMIDI(file_path)
 
         # Convert to pianoroll 
-        pianoroll = midi_file.get_piano_roll(fs=16) 
+        pianoroll = midi_file.get_piano_roll(fs=24) 
         pianoroll = pianoroll[36:128, :]
         pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32)#.T # Transpose to get (time, notes)
         #TODO
         # Check if changing pianoroll to Spectogram (also has note velocity) will benefit 'human feel'
         # Also check if dataset supports the idea of Spectogram
 
+        # BINARIZE
+        pianoroll_tensor = (pianoroll_tensor > 0).float()
 
         return pianoroll_tensor
+    
+    def extract_chords(self, file_path):
+        """
+        Extracts chord data from MIDI file
+        Args:
+            file_path (str): MIDI file path
+        Returns:
+            list of lists: A list of chord data where: [root_note (str), quality (str), full_chord_name (str), offset (float)]
+        """
+        midi_file = converter.parse(file_path)
+
+        chords = midi_file.chordify()
+
+        chord_progression = []
+
+        for c in chords.flat.getElementsByClass("Chord"):
+            if not c.isRest:
+                root_note = c.root().name
+                quality = c.quality
+                full_chord_name = c.pitchedCommonName
+                offset = c.offset  
+
+                chord_progression.append([root_note, quality, full_chord_name, offset])
+        return chord_progression
+
 
 def setup_datasets_and_dataloaders(dataset_dir):
     dataset = Dataset(dataset_dir)
