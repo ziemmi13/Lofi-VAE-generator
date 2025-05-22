@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from torch import nn
+from config import *
 
 class LofiModel(nn.Module):
     def __init__(self, device):
@@ -21,17 +22,19 @@ class LofiModel(nn.Module):
         Returns:
             torch.distributions.MultivariateNormal: Normal distribution of the encoded data.
         """
-        x = self.encoder(x)
-        mu, logvar = torch.chunk(x, 2, dim=-1) # torch.chunk - Attempts to split a tensor into the specified number of chunks. Each chunk is a view of the input tensor.
+        encoded = self.encoder(x)
+        mu, logvar = torch.chunk(encoded, 2, dim=-1) # torch.chunk - Attempts to split a tensor into the specified number of chunks. Each chunk is a view of the input tensor.
 
         # logvar can be <0 we dont want that 
         # self.softplus(logvar) works like log(1 + exp(logvar)) so that scale is always > 0
         # Softmax prevents vanishing gradients 
-        scale = self.softplus(logvar) + eps
+        std = self.softplus(logvar) + eps
+        # std = torch.exp(0.5 * logvar)
 
         # changes scale size from [batch_size, latent_dim] -> [batch_size, latent_dim, latent_dim] (makes it a diagonal matrix)
-        scale_tril = torch.diag_embed(scale)
+        # scale_tril = torch.diag_embed(scale)
         
+        scale_tril = torch.diag_embed(std)
         # Multidimentional Normal Distribution with avg mu and covariance matrix scale_tril
         return torch.distributions.MultivariateNormal(mu, scale_tril=scale_tril)
 
@@ -39,63 +42,130 @@ class LofiModel(nn.Module):
 
         return self.decoder(z)
     
-    def reparametrize(self, dist):
+    def reparameterize(self, distribution):
         """
         Reparameterizes the encoded data to sample from the latent space.
         
         Args:
-            dist (torch.distributions.MultivariateNormal): Normal distribution of the encoded data.
+            distribution (torch.distributions.MultivariateNormal): Normal distribution of the encoded data.
         Returns:
             torch.Tensor: Sampled data from the latent space.
         """
         # rsample (reparametrized sample) is just z = mu + scale * ε 
         # keeps the computation graph intact and enables backpropagation
-        return dist.rsample()
+        # return dist.rsample()
+        # rsample (reparametrized sample) is just z = mu + scale * ε 
+        # keeps the computation graph intact and enables backpropagation
+        return distribution.rsample()
+        
 
     def forward(self, x):
         """
         Performs a forward pass of VAE  
         Args:
+            x (torch.Tensor): Input MIDI
 
         Returns:
-            distribution ():
-            z (): 
-            reconstructed_x (): 
+            distribution (torch.distributions.MultivariateNormal): Normal distribution of the encoded data.
+            z (torch.Tensor): Latent vector 
+            reconstructed_x (torch.Tensor): Reconstructed input 
 
         """
         distribution = self.encode(x)
-        z = self.reparametrize(distribution)
+        z = self.reparameterize(distribution)
         reconstructed_x = self.decode(z)
 
         return distribution, z, reconstructed_x
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim=128, hidden_dim=256, latent_dim=64):
+    def __init__(self, input_dim=PIANOROLL_RANGE, hidden_dim=256, latent_dim=LATENT_DIM, dropout=0.1):
         super(Encoder, self).__init__()
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers=2, batch_first=True, bidirectional=True)
-        self.fc1 = nn.Linear(hidden_dim*2, latent_dim*2) # 2 * for mean and variance
+
+        self.input_projection = nn.Linear(input_dim, hidden_dim)
+
+        self.lstm = nn.LSTM(input_size=hidden_dim, 
+                            hidden_size=hidden_dim, 
+                            num_layers=2, 
+                            batch_first=True, 
+                            bidirectional=True, 
+                            dropout=dropout)
+
+        self.layer_norm = nn.LayerNorm(hidden_dim*2) # 2 * for mean and variance
+        self.dropout = nn.Dropout(dropout)
+
+        # One linear for mu and logvar
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_dim*2, hidden_dim*2), # 2 * for mean and variance
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim*2, latent_dim*2) # 2 * for mean and variance
+         ) 
 
     def forward(self, x):
-        x, (h_n, c_n) = self.lstm(x) # x - output features, h_n - hiden state, c_n - final cell state  
+        x = self.input_projection(x)
+        
+        lstm_out, (h_n, c_n) = self.lstm(x) # lstm_out - output features, h_n - hiden state, c_n - final cell state  
+        
         h_n = torch.cat((h_n[-2], h_n[-1]), dim=1)  # (batch, hidden_dim * 2)
-        x = self.fc1(h_n)
+
+        h_n = self.dropout(self.layer_norm(h_n))
+
+        x = self.fc(h_n)
+
         return x
 
 class Decoder(nn.Module):
-    def __init__(self, latent_dim=64, hidden_dim=256, output_dim=128, seq_len=92):
+    def __init__(self, latent_dim=LATENT_DIM, hidden_dim=256, output_dim=PIANOROLL_RANGE, seq_len=MIDI_LEN, dropout=0.1):
         super(Decoder, self).__init__()
         self.seq_len = seq_len
-        self.fc1 = nn.Sequential(
-            nn.Linear(latent_dim, hidden_dim),
-            nn.ReLU())
-        self.lstm = nn.LSTM(hidden_dim, hidden_dim, num_layers=2, batch_first=True)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
+        self.hidden_dim = hidden_dim
+
+        # Linear projection
+        self.latent_to_hidden = nn.Linear(latent_dim, hidden_dim*2)
+        self.latent_to_cell = nn.Linear(latent_dim, hidden_dim*2)
+
+        self.lstm = nn.LSTM(input_size=hidden_dim,
+                            hidden_size=hidden_dim, 
+                            num_layers=2, 
+                            batch_first=True,
+                            bidirectional=False,
+                            dropout=dropout
+        )
+
+        self.layer_norm = nn.LayerNorm(hidden_dim)
+        self.dropout = nn.Dropout(dropout)
+
+        # Output layer to project LSTM output to piano roll features (pitches)
+        self.output_projection = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, output_dim)
+        )
+
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, z):
-        x = self.fc1(z)
-        x = x.unsqueeze(1).repeat(1, self.seq_len, 1)  # (batch, seq_len, hidden_dim)
-        x, (h_n, c_n) = self.lstm(x)
-        x = torch.sigmoid(self.fc2(x)) # sigmoid used for BCE loss
+        batch_size = z.size(0)
+
+        # Prepare initial hidden and cell states for LSTM
+        h_0_flat = self.latent_to_hidden(z) # (batch_size, hidden_dim * num_layers)
+        c_0_flat = self.latent_to_cell(z) # (batch_size, hidden_dim * num_layers)
+
+        # Reshape to (num_layers, batch_size, hidden_dim) for LSTM
+        h_0 = h_0_flat.view(batch_size, 2, self.hidden_dim).permute(1, 0, 2).contiguous()
+        c_0 = c_0_flat.view(batch_size, 2, self.hidden_dim).permute(1, 0, 2).contiguous()
+
+
+        lstm_input = torch.zeros(batch_size, MIDI_LEN, self.hidden_dim, device=z.device)
+        lstm_out, _ = self.lstm(lstm_input, (h_0, c_0))
+
+        reconstruction = self.output_projection(lstm_out)
+        reconstruction = self.sigmoid(reconstruction)
+
         # TODO
         # Use teacher forcing
-        return x
+
+        return reconstruction
+
+        

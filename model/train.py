@@ -3,7 +3,7 @@ from config import *
 from dataset import setup_datasets_and_dataloaders
 from loss import compute_loss
 
-def train(model, dataset_dir, print_info=True, model_save_path = "saved_models/lofi-model.pth"):
+def train(model, dataset_dir, print_info=True, model_save_path = "./saved_models/lofi-model.pth"):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using {device} device")
     model.to(device)
@@ -21,6 +21,7 @@ def train(model, dataset_dir, print_info=True, model_save_path = "saved_models/l
 
         for batch_idx, data in enumerate(train_dataloader):
             data = data.to(device)
+       
             optimizer.zero_grad()
 
             distribution, z, reconstructed_data = model(data)
@@ -30,8 +31,11 @@ def train(model, dataset_dir, print_info=True, model_save_path = "saved_models/l
             # print(f"{data.shape = }")
 
             # Compute loss
-            loss, loss_reconstruction, loss_KL = compute_loss(data, reconstructed_data, distribution, z, loss_type = "BCE")
+            loss, loss_reconstruction, loss_KL = compute_loss(data, reconstructed_data,  distribution, z, loss_type = "BCE")
             loss.backward()
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+            # Compute loss
             train_loss += loss.item()
             train_loss_reconstruction += loss_reconstruction.item()
             train_loss_KL += loss_KL.item()
@@ -65,8 +69,9 @@ def train(model, dataset_dir, print_info=True, model_save_path = "saved_models/l
 
                 distribution, z, reconstructed_data = model(data)
 
+
                 # Compute loss
-                loss, loss_reconstruction, loss_KL = compute_loss(data, reconstructed_data, distribution, z, loss_type = "BCE")
+                loss, loss_reconstruction, loss_KL = compute_loss(data, reconstructed_data,  distribution, z, loss_type = "BCE")
 
                 val_loss += loss.item()
                 val_loss_reconstruction += loss_reconstruction.item()
@@ -74,11 +79,13 @@ def train(model, dataset_dir, print_info=True, model_save_path = "saved_models/l
 
         val_epoch_loss = val_loss / len(val_dataloader) 
         val_epoch_reconstruction_loss = val_loss_reconstruction / len(val_dataloader)
-        val_epoch_KL = val_loss_KL / len(val_dataloader)
+        val_epoch_KL_loss = val_loss_KL / len(val_dataloader)
         
         print(f'Epoch [{epoch + 1}/{NUM_EPOCHS}]')
         print(f'Training Loss: {epoch_loss:.4f}')
         print(f'Validation Loss: {val_epoch_loss:.4f}')
+        print(f'Reconstruction Loss: {val_epoch_reconstruction_loss:.4f}')
+        print(f'KL Loss: {val_epoch_KL_loss:.4f}')
         print('-' * 60)
 
         # # Log validation metrics
