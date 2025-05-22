@@ -7,7 +7,7 @@ from torch.utils.data import random_split
 import torch.nn.functional as F
 from music21 import converter
 
-class Dataset(Dataset):
+class MidiDataset(Dataset):
     def __init__(self, dataset_dir):
         self.dataset_dir = dataset_dir
         self.filepaths = glob(f"{self.dataset_dir}/*.mid")
@@ -21,35 +21,27 @@ class Dataset(Dataset):
         
         # Get midi file path
         midi_file_path = self.filepaths[index]
+
         # Prepare pianoroll tensor
         pianoroll_tensor = self.prepare_midi_file(midi_file_path)
 
-        # print(f"{pianoroll_tensor.shape = }")
-
-        max_len = MIDI_LEN
-        item_len = pianoroll_tensor.shape[1] # shape is (pitch, time)
-        if item_len < max_len:
-            pad_len = max_len - item_len
-            # print(f"{pad_len = }")
-            pianoroll_tensor_ = F.pad(pianoroll_tensor, (0, pad_len), mode='constant', value=0)  # pad time axis
-        else:
-            pianoroll_tensor_ = pianoroll_tensor[:, :MIDI_LEN]
+        # Add padding if necesarry
+        padded_pianoroll_tensor = self.pad_midi_tensor(pianoroll_tensor)
         
-        
-        # # Rescale for BCE
-        # pianoroll_tensor_ = pianoroll_tensor_ / 127.0  # Rescale to [0, 1] for BCE (127 is max volume in MIDI)
-        # pianoroll_tensor_ = torch.clamp(pianoroll_tensor_, 0, 1)
+        # Rescale for BCE
+        # padded_pianoroll_tensor = padded_pianoroll_tensor / 127.0  # Rescale to [0, 1] for BCE (127 is max volume in MIDI)
+        # padded_pianoroll_tensor = torch.clamp(padded_pianoroll_tensor, 0, 1) # Ensure the range
 
+        # Change from (num_pitches, MIDI_LEN) to (MIDI_LEN, num_pitches) for LSTM
+        permuted_tensor = padded_pianoroll_tensor.permute(1, 0)
 
-        # print(f"{pianoroll_tensor.shape = }")
-
-        return pianoroll_tensor_
+        return permuted_tensor
 
     def prepare_midi_file(self, file_path):
         """
         Prepares MIDI file to be procesed by the VAE model
         Args:
-            filepath
+            file_path (str): MIDI file path
 
         Returns:
             torch.Tensor: Tensor representation of the pianoroll
@@ -59,9 +51,9 @@ class Dataset(Dataset):
         midi_file = PrettyMIDI(file_path)
 
         # Convert to pianoroll 
-        pianoroll = midi_file.get_piano_roll(fs=24) 
-        pianoroll = pianoroll[36:128, :]
-        pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32)#.T # Transpose to get (time, notes)
+        pianoroll = midi_file.get_piano_roll(fs=FS) 
+        pianoroll = pianoroll[36:85, :] # Crop the piano roll (C2 - C6)
+        pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32)
         #TODO
         # Check if changing pianoroll to Spectogram (also has note velocity) will benefit 'human feel'
         # Also check if dataset supports the idea of Spectogram
@@ -69,6 +61,17 @@ class Dataset(Dataset):
         # BINARIZE
         pianoroll_tensor = (pianoroll_tensor > 0).float()
 
+        return pianoroll_tensor
+
+    def pad_midi_tensor(self, pianoroll_tensor):
+        num_pitches, item_len = pianoroll_tensor.shape
+        if item_len < MIDI_LEN:
+            pad_len = MIDI_LEN - item_len
+            # Pad the time axis
+            pianoroll_tensor = F.pad(pianoroll_tensor, (0, pad_len, 0, 0), mode='constant', value=0)  # pad time axis
+        else:
+            pianoroll_tensor = pianoroll_tensor[:, :MIDI_LEN]
+        
         return pianoroll_tensor
     
     def extract_chords(self, file_path):
@@ -97,16 +100,16 @@ class Dataset(Dataset):
 
 
 def setup_datasets_and_dataloaders(dataset_dir):
-    dataset = Dataset(dataset_dir)
+    dataset = MidiDataset(dataset_dir)
     train_size = int(TRAIN_VALIDATION_SPLIT * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    train_dataloader = DataLoader(train_dataset, batch_size=1, shuffle=False,)
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     return train_dataloader, val_dataloader
 
 # Sanity check
-# dataset = Dataset(dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\Projekt zespolowy\dataset")
+# dataset = MidiDataset(dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\Projekt zespolowy\dataset")
 # print(dataset[0].shape)
