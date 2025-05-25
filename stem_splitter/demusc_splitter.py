@@ -43,7 +43,7 @@ def separate_stems(wav_files):
         print(f"Finished separating: {wav_file.name}")
 
 # url = "https://www.youtube.com/watch?v=54eT20uujiM&list=PLn3XLGKpvI5uhNq5PWshtC6LQZWSw4OvC"
-url = "https://www.youtube.com/watch?v=IB3Lro4yXag"
+url = "https://www.youtube.com/watch?v=O3nB-ld08JI"
 
 wav_files = download_wav(yt_playlist_url=url)
 separate_stems(wav_files=wav_files)

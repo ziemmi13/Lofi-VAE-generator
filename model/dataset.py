@@ -5,7 +5,7 @@ from glob import glob
 from config import *
 from torch.utils.data import random_split
 import torch.nn.functional as F
-from music21 import converter
+from music21 import converter, tempo
 
 class MidiDataset(Dataset):
     def __init__(self, dataset_dir):
@@ -23,21 +23,20 @@ class MidiDataset(Dataset):
         midi_file_path = self.filepaths[index]
 
         # Prepare pianoroll tensor
-        pianoroll_tensor = self.prepare_midi_file(midi_file_path)
+        pianoroll_tensor = self.prepare_pianorol_tensor(midi_file_path)
 
         # Add padding if necesarry
         padded_pianoroll_tensor = self.pad_midi_tensor(pianoroll_tensor)
-        
-        # Rescale for BCE
-        # padded_pianoroll_tensor = padded_pianoroll_tensor / 127.0  # Rescale to [0, 1] for BCE (127 is max volume in MIDI)
-        # padded_pianoroll_tensor = torch.clamp(padded_pianoroll_tensor, 0, 1) # Ensure the range
 
-        # Change from (num_pitches, MIDI_LEN) to (MIDI_LEN, num_pitches) for LSTM
-        permuted_tensor = padded_pianoroll_tensor.permute(1, 0)
+        # Get chords
+        # chords = self.extract_chords(midi_file_path)
 
-        return permuted_tensor
+        # Get bpm
+        # bpm = self.get_bpm(midi_file_path)
 
-    def prepare_midi_file(self, file_path):
+        return padded_pianoroll_tensor
+
+    def prepare_pianorol_tensor(self, file_path):
         """
         Prepares MIDI file to be procesed by the VAE model
         Args:
@@ -52,7 +51,7 @@ class MidiDataset(Dataset):
 
         # Convert to pianoroll 
         pianoroll = midi_file.get_piano_roll(fs=FS) 
-        pianoroll = pianoroll[36:85, :] # Crop the piano roll (C2 - C6)
+        # pianoroll = pianoroll[36:85, :] # Crop the piano roll (C2 - C6)
         pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32)
         #TODO
         # Check if changing pianoroll to Spectogram (also has note velocity) will benefit 'human feel'
@@ -68,7 +67,7 @@ class MidiDataset(Dataset):
         if item_len < MIDI_LEN:
             pad_len = MIDI_LEN - item_len
             # Pad the time axis
-            pianoroll_tensor = F.pad(pianoroll_tensor, (0, pad_len, 0, 0), mode='constant', value=0)  # pad time axis
+            pianoroll_tensor = F.pad(pianoroll_tensor, (0, pad_len, 0, 0), mode='constant', value=0)
         else:
             pianoroll_tensor = pianoroll_tensor[:, :MIDI_LEN]
         
@@ -91,13 +90,24 @@ class MidiDataset(Dataset):
         for c in chords.flat.getElementsByClass("Chord"):
             if not c.isRest:
                 root_note = c.root().name
-                quality = c.quality
                 full_chord_name = c.pitchedCommonName
                 offset = c.offset  
 
-                chord_progression.append([root_note, quality, full_chord_name, offset])
+                chord_progression.append([root_note, full_chord_name, offset])
         return chord_progression
-
+    
+    def get_bpm(self, file_path):
+        print(f"{file_path = }")
+        score = converter.parse(file_path)
+        for el in score.recurse():
+            if isinstance(el, tempo.MetronomeMark):
+                return el.number
+            else:
+                return 90
+                # TODO
+                # Convert files to wav and extract bpm using librosa
+                # Save to csv
+                # Read from csv
 
 def setup_datasets_and_dataloaders(dataset_dir):
     dataset = MidiDataset(dataset_dir)
