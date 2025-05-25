@@ -97,7 +97,6 @@ class MidiDataset(Dataset):
         return chord_progression
     
     def get_bpm(self, file_path):
-        print(f"{file_path = }")
         score = converter.parse(file_path)
         for el in score.recurse():
             if isinstance(el, tempo.MetronomeMark):

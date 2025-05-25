@@ -21,19 +21,15 @@ def train(model, dataset_dir, print_info=True, model_save_path = "./saved_models
 
         for batch_idx, data in enumerate(train_dataloader):
             data = data.to(device)
-       
+
             optimizer.zero_grad()
 
-            distribution, z, reconstructed_data = model(data)
-
-            # print(f"{z.shape = }")
-            # print(f"{reconstructed_data.shape = }")
-            # print(f"{data.shape = }")
+            mu, logvar, z, reconstructed_data = model(data)
 
             # Compute loss
-            loss, loss_reconstruction, loss_KL = compute_loss(data, reconstructed_data,  distribution, z, loss_type = "BCE")
+            loss, loss_reconstruction, loss_KL = compute_loss(data, reconstructed_data, mu, logvar)
             loss.backward()
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             # Compute loss
             train_loss += loss.item()
@@ -44,8 +40,7 @@ def train(model, dataset_dir, print_info=True, model_save_path = "./saved_models
             optimizer.step()
 
             # Print info
-            if print_info:
-                if batch_idx % 10 == 0:
+            if print_info and batch_idx % 10 == 0:
                     print(f'Epoch: {epoch + 1}, Batch: {batch_idx}, Loss: {loss.item():.4f}')
                     # experiment.log_metric("train_loss", loss.item(), step=epoch * len(train_loader) + batch_idx)
                     # experiment.log_metric("train_loss_reconstruction", loss_reconstruction.item(), step=epoch * len(train_loader) + batch_idx)
@@ -65,13 +60,14 @@ def train(model, dataset_dir, print_info=True, model_save_path = "./saved_models
         val_loss_KL = 0
         with torch.no_grad():
             for batch, data in enumerate(val_dataloader):
+                
                 data = data.to(device)
 
-                distribution, z, reconstructed_data = model(data)
-
+                mu, logvar, z, reconstructed_data = model(data)
 
                 # Compute loss
-                loss, loss_reconstruction, loss_KL = compute_loss(data, reconstructed_data,  distribution, z, loss_type = "BCE")
+                loss, loss_reconstruction, loss_KL = compute_loss(data, reconstructed_data, mu, logvar)
+
 
                 val_loss += loss.item()
                 val_loss_reconstruction += loss_reconstruction.item()
@@ -81,12 +77,14 @@ def train(model, dataset_dir, print_info=True, model_save_path = "./saved_models
         val_epoch_reconstruction_loss = val_loss_reconstruction / len(val_dataloader)
         val_epoch_KL_loss = val_loss_KL / len(val_dataloader)
         
-        print(f'Epoch [{epoch + 1}/{NUM_EPOCHS}]')
-        print(f'Training Loss: {epoch_loss:.4f}')
-        print(f'Validation Loss: {val_epoch_loss:.4f}')
-        print(f'Reconstruction Loss: {val_epoch_reconstruction_loss:.4f}')
-        print(f'KL Loss: {val_epoch_KL_loss:.4f}')
-        print('-' * 60)
+        if print_info:
+            print(f'Epoch [{epoch + 1}/{NUM_EPOCHS}]')
+            print(f'Training Loss: {epoch_loss:.4f}')
+            print(f'Reconstruction Loss: {val_epoch_reconstruction_loss:.4f}')
+            print(f'KL Loss: {val_epoch_KL_loss:.4f}')
+            print()
+            print(f'Validation Loss: {val_epoch_loss:.4f}')
+            print('-' * 60, "\n")
 
         # # Log validation metrics
         # experiment.log_metric("val_loss", val_epoch_loss, step=epoch)
