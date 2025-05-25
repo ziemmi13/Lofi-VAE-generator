@@ -2,6 +2,7 @@ import torch
 from config import *
 from dataset import setup_datasets_and_dataloaders
 from loss import compute_loss
+from train_utils import EarlyStopping
 
 def train(model, dataset_dir, print_info=True, model_save_path = "./saved_models/lofi-model.pth"):
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -11,6 +12,8 @@ def train(model, dataset_dir, print_info=True, model_save_path = "./saved_models
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
     train_dataloader, val_dataloader = setup_datasets_and_dataloaders(dataset_dir)
+    
+    early_stopper = EarlyStopping(patience=5, path="checkpoints/best_model.pt")
 
     for epoch in range(NUM_EPOCHS):
         # Training phase
@@ -91,7 +94,14 @@ def train(model, dataset_dir, print_info=True, model_save_path = "./saved_models
         # experiment.log_metric("epoch_val_loss_reconstruction", val_epoch_reconstruction_loss, step=epoch)
         # experiment.log_metric("epoch_val_loss_KL", val_epoch_KL, step=epoch)
 
-    # Saving the trained model
+        # Early stopping
+
+
+        # Saving the trained model
+        early_stopper(val_epoch_loss, model)
+        if early_stopper.early_stop:
+            print("Early stopping triggered.")
+            break
 
     print("Finished training!")
     print(f"Saving the model to path: {model_save_path}")

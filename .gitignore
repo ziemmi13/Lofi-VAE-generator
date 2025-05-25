@@ -13,4 +13,5 @@ midi_read.py
 model/__pycache__
 model/saved_models/
 model/generated_midi_samples
-model/utils
+model/utils/
+model/checkpoints/
