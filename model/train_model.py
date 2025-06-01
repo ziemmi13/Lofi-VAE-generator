@@ -13,4 +13,4 @@ if __name__ == "__main__":
     model = LofiModel(device)
 
     # Train
-    train(model, dataset_dir, print_info=True)
+    train(model, dataset_dir, verbose=True)

@@ -4,7 +4,7 @@ from dataset import setup_datasets_and_dataloaders
 from loss import compute_loss
 from train_utils import EarlyStopping
 
-def train(model, dataset_dir, print_info=True, model_save_path = "./saved_models/lofi-model.pth"):
+def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lofi-model.pth"):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using {device} device")
     model.to(device)
@@ -42,12 +42,6 @@ def train(model, dataset_dir, print_info=True, model_save_path = "./saved_models
             # Update network
             optimizer.step()
 
-            # Print info
-            if print_info and batch_idx % 10 == 0:
-                    print(f'Epoch: {epoch + 1}, Batch: {batch_idx}, Loss: {loss.item():.4f}')
-                    # experiment.log_metric("train_loss", loss.item(), step=epoch * len(train_loader) + batch_idx)
-                    # experiment.log_metric("train_loss_reconstruction", loss_reconstruction.item(), step=epoch * len(train_loader) + batch_idx)
-                    # experiment.log_metric("train_loss_KL", loss_KL.item(), step=epoch * len(train_loader) + batch_idx)
         epoch_loss = train_loss / len(train_dataloader)
         epoch_reconstruction_loss = train_loss_reconstruction / len(train_dataloader)
         epoch_KL = train_loss_KL / len(train_dataloader)
@@ -80,7 +74,7 @@ def train(model, dataset_dir, print_info=True, model_save_path = "./saved_models
         val_epoch_reconstruction_loss = val_loss_reconstruction / len(val_dataloader)
         val_epoch_KL_loss = val_loss_KL / len(val_dataloader)
         
-        if print_info:
+        if verbose:
             print(f'Epoch [{epoch + 1}/{NUM_EPOCHS}]')
             print(f'Training Loss: {epoch_loss:.4f}')
             print(f'Reconstruction Loss: {val_epoch_reconstruction_loss:.4f}')
