@@ -69,7 +69,7 @@ class LofiModel(nn.Module):
         return mu, logvar, z, reconstructed_x
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim=MIDI_LEN, hidden_dim=LATENT_DIM, dropout=0.1):
+    def __init__(self, input_dim=INPUT_DIM, hidden_dim=LATENT_DIM, dropout=0.1):
         super(Encoder, self).__init__()
 
         self.input_projection = nn.Linear(input_dim, hidden_dim)
@@ -106,7 +106,7 @@ class Encoder(nn.Module):
         return x
 
 class Decoder(nn.Module):
-    def __init__(self, latent_dim=LATENT_DIM, hidden_dim=256, output_dim=MIDI_LEN, seq_len=MIDI_LEN, dropout=0.1):
+    def __init__(self, latent_dim=LATENT_DIM, hidden_dim=256, output_dim=PIANOROLL_RANGE, seq_len=PIANOROLL_RANGE, dropout=0.1):
         super(Decoder, self).__init__()
         self.seq_len = seq_len
         self.hidden_dim = hidden_dim

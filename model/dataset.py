@@ -167,20 +167,14 @@ class MidiDataset(Dataset):
 
 
 
-
-
-
-
-
-
 def setup_datasets_and_dataloaders(dataset_dir):
     dataset = MidiDataset(dataset_dir)
     train_size = int(TRAIN_VALIDATION_SPLIT * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=MidiDataset.collate_fn)
+    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=MidiDataset.collate_fn)
 
     return train_dataloader, val_dataloader
 
