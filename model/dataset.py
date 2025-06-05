@@ -55,6 +55,7 @@ class MidiDataset(Dataset):
         print(f"Finished preprocessing. Total valid sequences: {len(self.data_cache)}")
         print(f"  Skipped {num_skipped_length} files due to length filters.")
         print(f"  Skipped {num_skipped_error} files due to processing errors or being empty.")
+        print(50*"_"+"\n")
     
     def __len__(self):
         return len(self.data_cache)

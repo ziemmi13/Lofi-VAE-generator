@@ -22,24 +22,23 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
         train_loss_reconstruction = 0
         train_loss_KL = 0
 
-        for batch_idx, (data, seq_len) in enumerate(train_dataloader):
-            data = data.to(device)
+        for batch_idx, (sequences, lengths) in enumerate(train_dataloader):
+            sequences = sequences.to(device)
 
             optimizer.zero_grad()
 
-            mu, logvar, z, reconstructed_data = model(data)
+            reconstructed_logits, mu, logvar = model(sequences, lengths)
 
             # Compute loss
-            loss, loss_reconstruction, loss_KL = compute_loss(data, reconstructed_data, mu, logvar)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            loss, loss_reconstruction, loss_KL = compute_loss(sequences, reconstructed_logits, mu, logvar)
 
-            # Compute loss
             train_loss += loss.item()
             train_loss_reconstruction += loss_reconstruction.item()
             train_loss_KL += loss_KL.item()
 
             # Update network
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
         epoch_loss = train_loss / len(train_dataloader)
@@ -56,15 +55,13 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
         val_loss_reconstruction = 0
         val_loss_KL = 0
         with torch.no_grad():
-            for batch_idx, (data, seq_len) in enumerate(val_dataloader):
-                
-                data = data.to(device)
+            for batch_idx, (sequences, lengths) in enumerate(val_dataloader):
+                sequences = sequences.to(device)
 
-                mu, logvar, z, reconstructed_data = model(data)
+                reconstructed_logits, mu, logvar = model(sequences, lengths)
 
                 # Compute loss
-                loss, loss_reconstruction, loss_KL = compute_loss(data, reconstructed_data, mu, logvar)
-
+                loss, loss_reconstruction, loss_KL = compute_loss(sequences, reconstructed_logits, mu, logvar)
 
                 val_loss += loss.item()
                 val_loss_reconstruction += loss_reconstruction.item()

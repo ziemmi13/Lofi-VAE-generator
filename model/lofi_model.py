@@ -1,164 +1,172 @@
 import numpy as np
 import torch
 from torch import nn
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from config import *
 
 class LofiModel(nn.Module):
     def __init__(self, device):
         super(LofiModel, self).__init__()
         self.device = device
-        self.encoder = Encoder()
-        self.decoder = Decoder()
-        self.softplus = nn.Softplus()
+        # Decoder's input_dim for LSTM should match INPUT_DIM for teacher forcing
+        self.encoder = Encoder(input_dim=INPUT_DIM, hidden_dim=LATENT_DIM, latent_dim=LATENT_DIM, num_layers=LSTM_LAYERS)
+        self.decoder = Decoder(rnn_input_dim=INPUT_DIM, # For teacher forcing, LSTM input is from x (INPUT_DIM)
+                               lstm_hidden_dim=LATENT_DIM,
+                               z_latent_dim=LATENT_DIM,
+                               output_feature_dim=INPUT_DIM,
+                               num_layers=LSTM_LAYERS)
 
-        self.fc_mu = nn.Linear(LATENT_DIM*2, LATENT_DIM)
-        self.fc_logvar = nn.Linear(LATENT_DIM*2, LATENT_DIM)
-
-    def encode(self, x, eps=1e-8):
-        """
-        Encodes the input data into the latent space.
-        
-        Args:
-            x (torch.Tensor): Input data.
-            eps (float): Small value to avoid numerical instability - avoid /0 or log(0)
-        
-        Returns:
-            mu (torch.Tensor): 
-            logvar (torch.Tensor):
-        """
-        encoded = self.encoder(x)
-        mu = self.fc_mu(encoded)
-        logvar = self.fc_logvar(encoded)
-
-        return mu, logvar
-
-    def decode(self, z):
-
-        return self.decoder(z)
-    
     def reparameterize(self, mu, logvar):
         """
         Reparameterizes the encoded data to sample from the latent space.
         
         Args:
-            mu (torch.Tensor): 
-            logvar (torch.Tensor): 
+            mu (torch.Tensor): Mean of the latent Gaussian.
+            logvar (torch.Tensor): Log variance of the latent Gaussian.
         Returns:
             torch.Tensor: Sampled data from the latent space.
         """
-        return mu + torch.randn_like(mu) * (logvar / 2).exp()
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std) 
+        z = mu + eps * std
+        return z
         
-
-    def forward(self, x):
+    def forward(self, x, lengths):
         """
         Performs a forward pass of VAE  
         Args:
-            x (torch.Tensor): Input MIDI
+            x (torch.Tensor): Input MIDI (batch_size, max_seq_len, input_dim).
+            lengths (torch.Tensor): Original lengths of sequences in the batch.
 
         Returns:
-            distribution (torch.distributions.MultivariateNormal): Normal distribution of the encoded data.
-            z (torch.Tensor): Latent vector 
-            reconstructed_x (torch.Tensor): Reconstructed input 
-
+            reconstructed_x (torch.Tensor): Reconstructed input (batch_size, max_seq_len, input_dim).
+            mu (torch.Tensor): Latent mean (batch_size, latent_dim).
+            logvar (torch.Tensor): Latent log variance (batch_size, latent_dim).
         """
-        
-        mu, logvar = self.encode(x)
+        mu, logvar = self.encoder(x, lengths)
         z = self.reparameterize(mu, logvar)
-        reconstructed_x = self.decode(z)
+        # For teacher forcing, decoder uses original x as input sequence
+        reconstructed_x = self.decoder(x, z, lengths)
 
-        return mu, logvar, z, reconstructed_x
+        return reconstructed_x, mu, logvar
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim=INPUT_DIM, hidden_dim=LATENT_DIM, dropout=0.1):
+    def __init__(self, input_dim=INPUT_DIM, hidden_dim=LATENT_DIM, latent_dim=LATENT_DIM, num_layers=LSTM_LAYERS, dropout=0.1):
         super(Encoder, self).__init__()
+        self.hidden_dim = hidden_dim # LSTM hidden size
+        self.num_layers = num_layers
+        self.latent_dim = latent_dim # VAE latent z dimension
 
-        self.input_projection = nn.Linear(input_dim, hidden_dim)
+        self.lstm = nn.LSTM(input_size=input_dim,
+                              hidden_size=self.hidden_dim,
+                              num_layers=self.num_layers, # Corrected: use self.num_layers
+                              batch_first=True,
+                              dropout=dropout if self.num_layers > 1 else 0.0) # Corrected: use dropout param
 
-        # self.lstm = nn.LSTM(input_size=hidden_dim, 
-        #                     hidden_size=hidden_dim, 
-        #                     num_layers=2, 
-        #                     batch_first=True, 
-        #                     bidirectional=True, 
-        #                     dropout=dropout)
+        # Project LSTM's final hidden state to mean and logvar of latent distribution
+        # Input: (batch, num_layers * hidden_dim) -> Output: (batch, latent_dim)
+        self.hidden_to_mu = nn.Linear(self.hidden_dim * self.num_layers, self.latent_dim)
+        self.hidden_to_logvar = nn.Linear(self.hidden_dim * self.num_layers, self.latent_dim)
 
-        # self.layer_norm = nn.LayerNorm(hidden_dim*2) # 2 * for mean and variance
-        # self.dropout = nn.Dropout(dropout)
+    def forward(self, x, lengths):
+        """
+        Forward pass for the encoder.
+        Args:
+            x (torch.Tensor): Padded input sequences (batch_size, max_seq_len, input_dim).
+            lengths (torch.Tensor): Original lengths of sequences in the batch.
+        Returns:
+            tuple: mu and logvar of the latent space (each shape: batch_size, latent_dim)
+        """
+        # Pack padded batch of sequences for the LSTM
+        # Ensure lengths are on CPU and are integers/long for pack_padded_sequence
+        packed_input = pack_padded_sequence(x, lengths.cpu().long(), batch_first=True, enforce_sorted=False)
 
-        # One linear for mu and logvar
-        self.fc = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim*2), # 2 * for mean and variance
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim*2, LATENT_DIM*2) # 2 * for mean and variance
-         ) 
+        # Pass the packed input through the LSTM.
+        # hidden and cell are the final states: (num_layers * num_directions, batch, hidden_size)
+        _, (hidden, cell) = self.lstm(packed_input)
 
-    def forward(self, x):
-        x = self.input_projection(x)
-        
-        # lstm_out, (h_n, c_n) = self.lstm(x) # lstm_out - output features, h_n - hiden state, c_n - final cell state  
-        
-        # h_n = torch.cat((h_n[-2], h_n[-1]), dim=1)  # (batch, hidden_dim * 2)
+        # Flatten hidden layers: (num_layers, batch, hidden_dim) -> (batch, num_layers * hidden_dim)
+        # LSTM's hidden is (D*num_layers, N, H_out) where D=1 for non-bidirectional
+        # Permute to (N, D*num_layers, H_out) then view as (N, D*num_layers*H_out)
+        hidden = hidden.permute(1, 0, 2).contiguous().view(x.size(0), -1)
 
-        # h_n = self.dropout(self.layer_norm(h_n))
+        # mu and logvar
+        mu = self.hidden_to_mu(hidden)
+        logvar = self.hidden_to_logvar(hidden)
 
-        x = self.fc(x)
-
-        return x
+        return mu, logvar
 
 class Decoder(nn.Module):
-    def __init__(self, latent_dim=LATENT_DIM, hidden_dim=256, output_dim=PIANOROLL_RANGE, seq_len=PIANOROLL_RANGE, dropout=0.1):
+    def __init__(self, rnn_input_dim=INPUT_DIM, lstm_hidden_dim=LATENT_DIM, 
+                 z_latent_dim=LATENT_DIM, output_feature_dim=INPUT_DIM, 
+                 num_layers=LSTM_LAYERS, dropout=0.1):
         super(Decoder, self).__init__()
-        self.seq_len = seq_len
-        self.hidden_dim = hidden_dim
+        self.lstm_hidden_dim = lstm_hidden_dim
+        self.num_layers = num_layers
+        self.z_latent_dim = z_latent_dim
+        self.output_feature_dim = output_feature_dim
 
-        # Linear projection
-        self.latent_to_hidden = nn.Linear(latent_dim, hidden_dim)
-        # self.latent_to_cell = nn.Linear(latent_dim, hidden_dim*2)
+        # Project latent vector z to initial hidden and cell states for the LSTM
+        # Input: z_latent_dim -> Output: num_layers * lstm_hidden_dim
+        self.latent_to_hidden = nn.Linear(self.z_latent_dim, self.num_layers * self.lstm_hidden_dim)
+        self.latent_to_cell = nn.Linear(self.z_latent_dim, self.num_layers * self.lstm_hidden_dim)
 
-        # self.lstm = nn.LSTM(input_size=hidden_dim,
-        #                     hidden_size=hidden_dim, 
-        #                     num_layers=2, 
-        #                     batch_first=True,
-        #                     bidirectional=False,
-        #                     dropout=dropout
-        # )
+        # LSTM:
+        # input_size: dimension of input features at each time step (from x for teacher forcing)
+        # hidden_size: dimension of LSTM hidden units
+        self.lstm = nn.LSTM(input_size=rnn_input_dim, # Corrected: This is the dim of teacher-forced input x_t
+                              hidden_size=self.lstm_hidden_dim,
+                              num_layers=self.num_layers, # Corrected: use self.num_layers
+                              batch_first=True,
+                              dropout=dropout if self.num_layers > 1 else 0.0) # Corrected: use dropout param
 
-        # self.layer_norm = nn.LayerNorm(hidden_dim)
-        # self.dropout = nn.Dropout(dropout)
-
-        # Output layer to project LSTM output to piano roll features (pitches)
-        self.output_projection = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, output_dim)
-        )
-
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, z):
-        batch_size = z.size(0)
-
-        # Prepare initial hidden and cell states for LSTM
-        # h_0_flat = self.latent_to_hidden(z) # (batch_size, hidden_dim * num_layers)
-        # c_0_flat = self.latent_to_cell(z) # (batch_size, hidden_dim * num_layers)
-
-        # # Reshape to (num_layers, batch_size, hidden_dim) for LSTM
-        # h_0 = h_0_flat.view(batch_size, 2, self.hidden_dim).permute(1, 0, 2).contiguous()
-        # c_0 = c_0_flat.view(batch_size, 2, self.hidden_dim).permute(1, 0, 2).contiguous()
-
-
-        # lstm_input = torch.zeros(batch_size, MIDI_LEN, self.hidden_dim, device=z.device)
-        # lstm_out, _ = self.lstm(lstm_input, (h_0, c_0))
-
-        h = self.latent_to_hidden(z)
-
-        reconstruction = self.output_projection(h)
-        reconstruction = self.sigmoid(reconstruction)
-
-        # TODO
-        # Use teacher forcing
-
-        return reconstruction
-
+        # Output layer: maps LSTM hidden state to output feature dimension
+        self.fc_out = nn.Linear(self.lstm_hidden_dim, self.output_feature_dim)
         
+        # If your output features are probabilities (e.g., for a piano roll),
+        # you might want a sigmoid activation here or after the loss calculation.
+        # self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x_teacher_force, z, lengths):
+        """
+        Forward pass for the decoder.
+        Args:
+            x_teacher_force (torch.Tensor): Ground truth sequences for teacher forcing
+                                           (batch_size, max_seq_len, rnn_input_dim).
+            z (torch.Tensor): Latent vector (batch_size, z_latent_dim).
+            lengths (torch.Tensor): Original lengths of sequences in the batch.
+        Returns:
+            torch.Tensor: Reconstructed sequences (batch_size, max_seq_len, output_feature_dim).
+        """
+        batch_size = z.size(0)
+        max_len = x_teacher_force.shape[1]
+
+        # Project latent vector z to initial hidden and cell states
+        # Output shape: (batch_size, num_layers * lstm_hidden_dim)
+        initial_hidden_flat = self.latent_to_hidden(z)
+        initial_cell_flat = self.latent_to_cell(z)
+
+        # Reshape to (num_layers, batch_size, lstm_hidden_dim) for LSTM
+        h_0 = initial_hidden_flat.view(batch_size, self.num_layers, self.lstm_hidden_dim).permute(1, 0, 2).contiguous()
+        c_0 = initial_cell_flat.view(batch_size, self.num_layers, self.lstm_hidden_dim).permute(1, 0, 2).contiguous()
+
+        # Prepare input sequence for LSTM (using teacher forcing with x_teacher_force)
+        # x_teacher_force has shape (batch_size, max_seq_len, rnn_input_dim)
+        # Ensure lengths are on CPU and are integers/long for pack_padded_sequence
+        packed_input = pack_padded_sequence(x_teacher_force, lengths.cpu().long(), batch_first=True, enforce_sorted=False)
+        
+        # LSTM forward pass
+        packed_output, _ = self.lstm(packed_input, (h_0, c_0))
+        
+        # Unpack the output sequence
+        # output shape: (batch_size, max_seq_len, lstm_hidden_dim)
+        output, _ = pad_packed_sequence(packed_output, batch_first=True, total_length=max_len)
+        
+        # Pass LSTM outputs through the final fully connected layer
+        # reconstructed_x shape: (batch_size, max_seq_len, output_feature_dim)
+        reconstructed_x = self.fc_out(output)
+
+        # if self.sigmoid:
+        #     reconstructed_x = self.sigmoid(reconstructed_x)
+            
+        return reconstructed_x
