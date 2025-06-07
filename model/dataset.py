@@ -33,7 +33,7 @@ class MidiDataset(Dataset):
         for i, file_path in enumerate(self.filepaths):
             # Print progress periodically to keep track of long preprocessing jobs.
             if (i + 1) % 100 == 0:
-                print(f"  Processed {i+1}/{len(self.filepaths)} files.")
+                print(f"Processed {i+1}/{len(self.filepaths)} files.")
             pianoroll_tensor = self._prepare_pianoroll_tensor(file_path)
             
             if pianoroll_tensor is not None:
@@ -45,7 +45,7 @@ class MidiDataset(Dataset):
                     # For LSTMs with `batch_first=True`, we need (time, pitch).
                     # So, we transpose the tensor before caching it.
                     transposed_tensor = pianoroll_tensor.T
-                    self.data_cache.append((transposed_tensor, seq_len))
+                    self.data_cache.append((transposed_tensor, seq_len, file_path))
                 else:
                         num_skipped_length += 1
                         print(f"  Skipping '{os.path.basename(file_path)}': Length {seq_len} not in [{MIN_SEQ_LEN_FILTER}, {MAX_SEQ_LEN_FILTER}].")
