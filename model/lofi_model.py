@@ -62,59 +62,80 @@ class LofiModel(nn.Module):
         # Reconstruct sample
         reconstructed_sample, _, _ = self(padded_tensor, tensor_len)
         reconstructed_sample = reconstructed_sample.squeeze()
-        reconstructed_sample = torch.sigmoid(reconstructed_sample)
+
+        reconstructed_sample = torch.clamp(reconstructed_sample, 0.0, 1.0)
 
         #Threshold
-        reconstructed_sample[reconstructed_sample < 0.5] = 0
-        reconstructed_sample[reconstructed_sample >= 0.5] = 1
+        reconstructed_sample[reconstructed_sample < 0.01] = 0.0
 
         # Transpose to convert into midi
         reconstructed_sample_T = reconstructed_sample.T
 
-        if save_to_midi:
-            # Create a PrettyMIDI object
-            midi = pretty_midi.PrettyMIDI()
-            piano_program = pretty_midi.instrument_name_to_program('Acoustic Grand Piano')
-            piano = pretty_midi.Instrument(program=piano_program)
+        # Scale back to original velocity
+        # reconstructed_sample_T *= 127
 
-            # Track note on/off times per pitch
-            # We'll detect note start and end by scanning through time steps
-            for pitch_idx in range(reconstructed_sample_T.shape[0]):
-                note_on = None
-                for t in range(reconstructed_sample_T.shape[1]):
-                    if reconstructed_sample_T[pitch_idx, t] == 1 and note_on is None:
-                        # Note on at time t/fs seconds
-                        note_on = t / FS
-                    elif (reconstructed_sample_T[pitch_idx, t] == 0 or t == reconstructed_sample_T.shape[0]-1) and note_on is not None:
-                        # Note off at time t/fs seconds
-                        note_off = t / FS
-                        # Add the note to the instrument
-                        note = pretty_midi.Note(    
-                            velocity=50,
-                            pitch= pitch_idx+MIN_MIDI_NOTE,
-                            start=note_on,
-                            end=note_off
-                        )
-                        piano.notes.append(note)
-                        note_on = None  # reset for next note
 
-                # If a note is still on at the end, close it
-                if note_on is not None:
-                    note_off = reconstructed_sample_T.shape[1] / FS
+        midi = pretty_midi.instrument_name_to_program('Acoustic Grand Piano')
+        instrument = pretty_midi.Instrument(program=midi)
+
+        for pitch_idx in range(reconstructed_sample_T.shape[0]):
+            note_on_time = None
+            peak_velocity_normalized = 0
+
+            for t in range(reconstructed_sample_T.shape[1]):
+                current_velocity_normalized = reconstructed_sample_T[pitch_idx, t].item()
+                is_note_on = current_velocity_normalized > 0.1
+
+                # --- Note On Event ---
+                if is_note_on and note_on_time is None:
+                    note_on_time = t / FS
+                    peak_velocity_normalized = current_velocity_normalized
+                
+                # --- Note Continues ---
+                elif is_note_on and note_on_time is not None:
+                    # Update the peak velocity if the current one is higher
+                    if current_velocity_normalized > peak_velocity_normalized:
+                        peak_velocity_normalized = current_velocity_normalized
+
+                # --- Note Off Event ---
+                elif not is_note_on and note_on_time is not None:
+                    note_off_time = t / FS
+                    
+                    # Un-normalize velocity to MIDI range [0, 127]
+                    velocity_midi = int(peak_velocity_normalized * 127)
+                    if velocity_midi > 127: velocity_midi = 127
+                    if velocity_midi == 0: velocity_midi = 1 # Velocity 0 is note-off
+
                     note = pretty_midi.Note(
-                        velocity=50,
-                        pitch= pitch_idx+MIN_MIDI_NOTE,
-                        start=note_on,
-                        end=note_off
+                        velocity=velocity_midi,
+                        pitch=pitch_idx + MIN_MIDI_NOTE,
+                        start=note_on_time,
+                        end=note_off_time
                     )
-                    piano.notes.append(note)
+                    instrument.notes.append(note)
+                    
+                    # Reset for the next note
+                    note_on_time = None
+                    peak_velocity_normalized = 0
 
-            # Add instrument to the PrettyMIDI object
-            midi.instruments.append(piano)
-        
-        # Write out the MIDI data
+            # If a note is still on at the very end of the sequence, close it
+            if note_on_time is not None:
+                note_off_time = reconstructed_sample_T.shape[1] / FS
+                velocity_midi = int(peak_velocity_normalized * 127)
+                if velocity_midi > 127: velocity_midi = 127
+                if velocity_midi == 0: velocity_midi = 1
+
+                note = pretty_midi.Note(
+                    velocity=velocity_midi,
+                    pitch=pitch_idx + MIN_MIDI_NOTE,
+                    start=note_on_time,
+                    end=note_off_time
+                )
+                instrument.notes.append(note)
+
+        midi.instruments.append(instrument)
         midi.write(save_path)
-
+        print(f"Reconstructed MIDI saved to {save_path}")
 
 
     def generate(self, num_samples, max_len, z_sample=None, temperature=1.0):

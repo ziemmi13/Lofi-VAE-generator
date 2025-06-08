@@ -30,7 +30,7 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
             reconstructed_logits, mu, logvar = model(sequences, lengths)
 
             # Compute loss
-            loss, loss_reconstruction, loss_KL = compute_loss(sequences, reconstructed_logits, mu, logvar)
+            loss, loss_reconstruction, loss_KL = compute_loss(sequences, reconstructed_logits, mu, logvar, loss_type="MSE")
 
             train_loss += loss.item()
             train_loss_reconstruction += loss_reconstruction.item()
@@ -61,7 +61,7 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
                 reconstructed_logits, mu, logvar = model(sequences, lengths)
 
                 # Compute loss
-                loss, loss_reconstruction, loss_KL = compute_loss(sequences, reconstructed_logits, mu, logvar)
+                loss, loss_reconstruction, loss_KL = compute_loss(sequences, reconstructed_logits, mu, logvar, loss_type="MSE")
 
                 val_loss += loss.item()
                 val_loss_reconstruction += loss_reconstruction.item()

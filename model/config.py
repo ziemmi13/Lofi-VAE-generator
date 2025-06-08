@@ -3,7 +3,7 @@ TRAIN_VALIDATION_SPLIT = 0.85
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-2
-NUM_EPOCHS = 1000
+NUM_EPOCHS = 500
 LATENT_DIM = 256
 LSTM_LAYERS = 2
 
@@ -22,5 +22,5 @@ INPUT_DIM = MAX_MIDI_NOTE - MIN_MIDI_NOTE + 1
 
 # Dataset Filtering
 MIN_SEQ_LEN_FILTER = 10  # Minimum number of time steps for a sequence to be included.
-MAX_SEQ_LEN_FILTER = 500 # Maximum number of time steps for a sequence to be included.
+MAX_SEQ_LEN_FILTER = 5000 # Maximum number of time steps for a sequence to be included.
                         
