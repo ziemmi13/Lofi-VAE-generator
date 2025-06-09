@@ -15,6 +15,8 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
     
     early_stopper = EarlyStopping(patience=5, path="checkpoints/best_model.pt")
 
+    print("Starting training:")
+    print(f"The datset has {len(train_dataloader)} batches")
     for epoch in range(NUM_EPOCHS):
         # Training phase
         model.train()
@@ -22,6 +24,7 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
         train_loss_reconstruction = 0
         train_loss_KL = 0
 
+        print(f'Epoch [{epoch + 1}/{NUM_EPOCHS}]')
         for batch_idx, (sequences, lengths, bpm) in enumerate(train_dataloader):
             sequences = sequences.to(device)
 
@@ -41,6 +44,11 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
+            if verbose:
+                if batch_idx % 100 == 0:
+                    print(f'\tBatch index: {batch_idx+1}/{len(train_dataloader)}')
+                    print(f'\tCurrent training Loss: {train_loss:.4f}')
+
         epoch_loss = train_loss / len(train_dataloader)
         epoch_reconstruction_loss = train_loss_reconstruction / len(train_dataloader)
         epoch_KL = train_loss_KL / len(train_dataloader)
@@ -54,6 +62,7 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
         val_loss = 0
         val_loss_reconstruction = 0
         val_loss_KL = 0
+        print("Validating:")
         with torch.no_grad():
             for batch_idx, (sequences, lengths, bpm) in enumerate(val_dataloader):
                 sequences = sequences.to(device)
@@ -66,6 +75,11 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
                 val_loss += loss.item()
                 val_loss_reconstruction += loss_reconstruction.item()
                 val_loss_KL += loss_KL.item()
+
+                if verbose:
+                    if batch_idx % 100 == 0:
+                        print(f'\tBatch index: {batch_idx+1}/{len(val_dataloader)}')
+                        print(f'\tCurrent validation Loss: {val_loss:.4f}')
 
         val_epoch_loss = val_loss / len(val_dataloader) 
         val_epoch_reconstruction_loss = val_loss_reconstruction / len(val_dataloader)

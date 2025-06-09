@@ -23,7 +23,7 @@ class MidiDataset(Dataset):
         ]
 
         self.midi_dict = RangeDict([
-                (range(1, 9), "piano"),
+                (range(0, 9), "piano"),
                 (range(9, 17), "chromatic percussion"),
                 (range(17, 25), "organ"),
                 (range(25, 33), "guitar"),
@@ -73,7 +73,6 @@ class MidiDataset(Dataset):
         pianorolls = {instrument: None for instrument in self.valid_instruments}
         for instrument in midi_file.instruments:
             pianoroll = instrument.get_piano_roll(fs=FS) 
-            print(f"{instrument = }")
 
             instrument_category = self.get_midi_instrument_name(instrument)
             # Fill the dict with PRESENT instruments
@@ -184,6 +183,7 @@ class MidiDataset(Dataset):
         )
 
 def setup_datasets_and_dataloaders(dataset_dir):
+    print("Setting up datasets and dataloaders...")
     dataset = MidiDataset(dataset_dir)
     train_size = int(TRAIN_VALIDATION_SPLIT * len(dataset))
     val_size = len(dataset) - train_size
@@ -192,6 +192,7 @@ def setup_datasets_and_dataloaders(dataset_dir):
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=MidiDataset.collate_fn)
     val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=MidiDataset.collate_fn)
 
+    print("Finished setting up datasets and dataloaders.")
     return train_dataloader, val_dataloader\
     
 class RangeDict:
@@ -208,11 +209,11 @@ class RangeDict:
         raise KeyError(f"{key} not found in any range.")
 
 # Sanity check
-dataset = MidiDataset()
+# dataset = MidiDataset()
 
-for i in range(5):
-    print(dataset[i][0].shape)
-    print()
-    print(50*"_")
-    print()
+# for i in range(5):
+#     print(dataset[i][0].shape)
+#     print()
+#     print(50*"_")
+#     print()
 
