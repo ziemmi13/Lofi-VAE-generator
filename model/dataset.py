@@ -7,61 +7,54 @@ from torch.utils.data import random_split
 import torch.nn.functional as F
 from music21 import converter, tempo
 import os
+import pandas as pd
+import numpy as np
 
 class MidiDataset(Dataset):
-    def __init__(self, dataset_dir):
-        self.dataset_dir = dataset_dir
-        self.filepaths = glob(f"{self.dataset_dir}/*.mid")
+    def __init__(self, dataset_dir="dataset"):
+        self.songs_dir = os.path.join(dataset_dir, "all_songs")
+        self.df = pd.read_csv(os.path.join(dataset_dir, "midi_metadata.csv"))
+        self.valid_instruments = [
+            "drumms",
+            "piano", # if piano not present check "organ"
+            "bass",
+            "guitar"
+            # "others" - pick one present from "strings", "ensamble", "synth lead", "synth pad"
+        ]
 
-        # A cache to store pre-processed (tensor, length) tuples.
-        self.data_cache = [] 
-        self._preprocess_data() 
-    
-    def _preprocess_data(self):
-        """
-        Pre-processes all MIDI files found and stores their tensor representations
-        and original lengths in memory (self.data_cache).
-        This method filters out invalid or too-long/too-short sequences.
-        It also calculates the total number of 1s and 0s for loss weighting.
-        """
-        print(f"Starting MIDI dataset preprocessing from: {self.dataset_dir}")
-        print(f"Found {len(self.filepaths)} MIDI files.")
+        self.midi_dict = RangeDict([
+                (range(1, 9), "piano"),
+                (range(9, 17), "chromatic percussion"),
+                (range(17, 25), "organ"),
+                (range(25, 33), "guitar"),
+                (range(33, 41), "bass"),
+                (range(41, 49), "strings"),
+                (range(49, 57), "ensemble"),
+                (range(57, 65), "brass"),
+                (range(65, 73), "reed"),
+                (range(73, 81), "pipe"),
+                (range(81, 89), "synth lead"),
+                (range(89, 97), "synth pad"),
+                (range(97, 105), "synth effects"),
+                (range(105, 113), "synth ethnic"),
+                (range(113, 121), "synth percussive"),
+                (range(121, 129), "sound effects"),
+            ])
 
-        num_skipped_length = 0 # Counter for sequences skipped due to length filters
-        num_skipped_error = 0 
-
-        for i, file_path in enumerate(self.filepaths):
-            # Print progress periodically to keep track of long preprocessing jobs.
-            if (i + 1) % 100 == 0:
-                print(f"Processed {i+1}/{len(self.filepaths)} files.")
-            pianoroll_tensor = self._prepare_pianoroll_tensor(file_path)
-            
-            if pianoroll_tensor is not None:
-                seq_len = pianoroll_tensor.shape[1]
-            
-                # Apply length filters.
-                if MIN_SEQ_LEN_FILTER <= seq_len <= MAX_SEQ_LEN_FILTER:
-                    # PrettyMIDI's get_piano_roll returns (pitch, time).
-                    # For LSTMs with `batch_first=True`, we need (time, pitch).
-                    # So, we transpose the tensor before caching it.
-                    transposed_tensor = pianoroll_tensor.T
-                    self.data_cache.append((transposed_tensor, seq_len, file_path))
-                else:
-                        num_skipped_length += 1
-                        print(f"  Skipping '{os.path.basename(file_path)}': Length {seq_len} not in [{MIN_SEQ_LEN_FILTER}, {MAX_SEQ_LEN_FILTER}].")
-            else:
-                num_skipped_error += 1
-        
-        print(f"Finished preprocessing. Total valid sequences: {len(self.data_cache)}")
-        print(f"  Skipped {num_skipped_length} files due to length filters.")
-        print(f"  Skipped {num_skipped_error} files due to processing errors or being empty.")
-        print(50*"_"+"\n")
-    
     def __len__(self):
-        return len(self.data_cache)
+        return len(self.df)
     
-    def __getitem__(self, index):
-        return self.data_cache[index]
+    def __getitem__(self, index, verbose=False):
+        # Load data from csv
+        file_name = self.df.iloc[index, 0]
+        file_path = os.path.join(self.songs_dir, file_name)
+        bpm = int(round(self.df.iloc[index, 3]))
+
+        pianoroll_tensor = self._prepare_pianoroll_tensor(file_path)
+        seq_len = pianoroll_tensor.shape[2]
+        if verbose:
+            return pianoroll_tensor, seq_len, bpm, file_name
+        return pianoroll_tensor, seq_len, bpm
 
     def _prepare_pianoroll_tensor(self, file_path):
         """
@@ -70,32 +63,49 @@ class MidiDataset(Dataset):
             file_path (str): MIDI file path
 
         Returns:
-            torch.Tensor: Tensor representation of the pianoroll
+            torch.Tensor: Tensor representation of the pianoroll (NUM_INSTRUMENTS, NUM_PITCHES, time).
         
         """
         # Load MIDI file
         midi_file = PrettyMIDI(file_path)
 
-        # Convert to pianoroll 
-        pianoroll = midi_file.get_piano_roll(fs=FS) 
-        pianoroll = pianoroll[MIN_MIDI_NOTE:MAX_MIDI_NOTE+1, :]
-        pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32)
+        # Convert to pianoroll for each instrument
+        pianorolls = {instrument: None for instrument in self.valid_instruments}
+        for instrument in midi_file.instruments:
+            pianoroll = instrument.get_piano_roll(fs=FS) 
+            print(f"{instrument = }")
 
-        # BINARIZE
-        pianoroll_tensor = (pianoroll_tensor > 0).float()
+            instrument_category = self.get_midi_instrument_name(instrument)
+            # Fill the dict with PRESENT instruments
+            if instrument_category in self.valid_instruments:
+                pianoroll = pianoroll[MIN_MIDI_NOTE:MAX_MIDI_NOTE+1, :]
+                pianorolls[instrument] = pianoroll
 
-        return pianoroll_tensor
+        # Add padding and fill in missing instruments 
+        longest_instrument_track = int(midi_file.get_end_time()*FS)
+        final_pianorolls = []
+        for instrument in self.valid_instruments:
+            pianoroll = pianorolls.get(instrument)
+            # Fill in missing instruments with silence
+            if pianoroll is None:
+                silent_pianoroll = np.zeros((NUM_PITCHES, longest_instrument_track), dtype=np.float32)
+                final_pianorolls.append(silent_pianoroll)
+            # Add padding if necessary
+            else:
+                if pianoroll.shape[1] < longest_instrument_track:
+                    pad_width = longest_instrument_track - pianoroll.shape[1]
+                    padded_pianoroll = np.pad(pianoroll, ((0, 0), (0, pad_width)), mode='constant')
+                    final_pianorolls.append(padded_pianoroll)
 
-    # def pad_midi_tensor(self, pianoroll_tensor):
-    #     num_pitches, item_len = pianoroll_tensor.shape
-    #     if item_len < MIDI_LEN:
-    #         pad_len = MIDI_LEN - item_len
-    #         # Pad the time axis
-    #         pianoroll_tensor = F.pad(pianoroll_tensor, (0, pad_len, 0, 0), mode='constant', value=0)
-    #     else:
-    #         pianoroll_tensor = pianoroll_tensor[:, :MIDI_LEN]
-        
-    #     return pianoroll_tensor
+        # Stack pianorolls into a tensor
+        pianoroll_stack = np.stack(final_pianorolls)
+
+        # Reshape
+        transposed_pianorolls = torch.tensor(pianoroll_stack, dtype=torch.float32)
+        # Normalize velocities into <0,1> (max vel = 127) 
+        transposed_pianorolls /= 127
+
+        return transposed_pianorolls
     
     def extract_chords(self, file_path):
         """
@@ -120,53 +130,58 @@ class MidiDataset(Dataset):
                 chord_progression.append([root_note, full_chord_name, offset])
         return chord_progression
     
-    def get_bpm(self, file_path):
-        score = converter.parse(file_path)
-        for el in score.recurse():
-            if isinstance(el, tempo.MetronomeMark):
-                return el.number
-            else:
-                return 90
-                # TODO
-                # Convert files to wav and extract bpm using librosa
-                # Save to csv
-                # Read from csv
+    def get_midi_instrument_name(self, instrument):
+        idx = instrument.program
+        if instrument.is_drum:
+            return "drumms" 
+        else:
+            return self.midi_dict[idx]
+        
     
     @staticmethod
     def collate_fn(batch):
         """
-        Custom collate function for PyTorch DataLoader.
-        This is CRUCIAL for handling variable-length sequences in a batch.
-        It pads all sequences in a batch to the length of the longest sequence
-        in that specific batch. It also sorts the batch by length, which is
-        often recommended for efficiency with `pack_padded_sequence`.
+         It pads all sequences in a batch to the length of the longest sequence.
+        Args:
+            batch (list): A list of tuples, where each tuple is 
+                          (pianoroll_tensor, seq_len, bpm).
+                          pianoroll_tensor shape: (num_instruments, num_pitches, time)
+        Returns:
+            tuple: A tuple containing:
+                - padded_sequences (torch.Tensor): Padded tensors of shape 
+                  (batch_size, num_instruments, num_pitches, max_len).
+                - lengths (torch.Tensor): Original sequence lengths of shape (batch_size,).
+                - bpms (torch.Tensor): BPM values for each item in the batch (batch_size,).
         """
         # Sort the batch by sequence length in descending order.
         # This is a common optimization for `pack_padded_sequence` in LSTMs.
         # `x[1]` refers to the original length stored in the tuple `(tensor, length)`.
         batch.sort(key=lambda x: x[1], reverse=True)
 
-        sequences = [item[0] for item in batch] # Extract the tensors
-        lengths = [item[1] for item in batch]   # Extract the original lengths
+        # Extract tensors, lenghts, bpms
+        tensors, lengths, bpms = zip(*batch)
 
-        # Determine the maximum sequence length in the current batch.
+        # Max len in the batch
+        num_instruments = tensors[0].shape[0]
+        num_pitches = tensors[0].shape[1]
         max_len = max(lengths)
-        # Get the number of features (notes), which should be INPUT_DIM (88).
-        num_features = sequences[0].shape[1] 
 
-        # Create a tensor of zeros for padding. All sequences will be padded to `max_len`.
-        padded_sequences = torch.zeros(len(batch), max_len, num_features, dtype=torch.float32)
+        # Create a batch of tensors of zeros for padding. All tensors will be padded to `max_len`.
+        batch_size = len(tensors)
+        padded_batch = torch.zeros(batch_size, num_instruments, num_pitches, max_len, dtype=torch.float32)
         
         # Fill the padded tensor with the actual sequence data.
-        for i, seq in enumerate(sequences):
-            # Place the sequence at the beginning of its row, leaving the rest as padding (zeros).
-            padded_sequences[i, :len(seq), :] = seq
+        for i, tensor in enumerate(tensors):
+            # Get the original length of the current sequence
+            end = lengths[i]
+            # Use slicing to copy the 3D tensor into its place in the 4D batch tensor
+            padded_batch[i, :, :, :end] = tensor
 
-        # Return the padded sequences and their original lengths.
-        # The lengths tensor is essential for `pack_padded_sequence`.
-        return padded_sequences, torch.tensor(lengths, dtype=torch.long)
-
-
+        return (
+            padded_batch, 
+            torch.tensor(lengths, dtype=torch.long), 
+            torch.tensor(bpms, dtype=torch.long)
+        )
 
 def setup_datasets_and_dataloaders(dataset_dir):
     dataset = MidiDataset(dataset_dir)
@@ -177,8 +192,27 @@ def setup_datasets_and_dataloaders(dataset_dir):
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=MidiDataset.collate_fn)
     val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=MidiDataset.collate_fn)
 
-    return train_dataloader, val_dataloader
+    return train_dataloader, val_dataloader\
+    
+class RangeDict:
+    def __init__(self, ranges):
+        """
+        Initialize with an iterable of (range, value) pairs.
+        """
+        self.ranges = list(ranges)
+
+    def __getitem__(self, key):
+        for rng, value in self.ranges:
+            if key in rng:
+                return value
+        raise KeyError(f"{key} not found in any range.")
 
 # Sanity check
-# dataset = MidiDataset(dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\Projekt zespolowy\dataset")
-# print(dataset[1])
+dataset = MidiDataset()
+
+for i in range(5):
+    print(dataset[i][0].shape)
+    print()
+    print(50*"_")
+    print()
+

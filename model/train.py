@@ -22,7 +22,7 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
         train_loss_reconstruction = 0
         train_loss_KL = 0
 
-        for batch_idx, (sequences, lengths) in enumerate(train_dataloader):
+        for batch_idx, (sequences, lengths, bpm) in enumerate(train_dataloader):
             sequences = sequences.to(device)
 
             optimizer.zero_grad()
@@ -55,7 +55,7 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
         val_loss_reconstruction = 0
         val_loss_KL = 0
         with torch.no_grad():
-            for batch_idx, (sequences, lengths) in enumerate(val_dataloader):
+            for batch_idx, (sequences, lengths, bpm) in enumerate(val_dataloader):
                 sequences = sequences.to(device)
 
                 reconstructed_logits, mu, logvar = model(sequences, lengths)
