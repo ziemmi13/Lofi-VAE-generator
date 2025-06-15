@@ -4,6 +4,8 @@ from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 import pretty_midi
 from config import *
+from dataset import MidiDataset
+import os
 
 class LofiModel(nn.Module):
     def __init__(self, device, num_instruments=NUM_INSTRUMENTS, num_pitches=NUM_PITCHES):
@@ -46,6 +48,7 @@ class LofiModel(nn.Module):
 
         # Reshape from (batch_size, num_instruments, num_pitches, max_len) to (batch_size, max_len, num_instruments*num_pitches, ) for LSTM
         x_flat = x.permute(0, 3, 1, 2).contiguous() # -> (B, T, I, P)
+
         x_flat = x_flat.view(batch_size, max_len, -1) # -> (B, T, I*P)
         
         # Encoder and Reparameterization
@@ -61,89 +64,122 @@ class LofiModel(nn.Module):
 
         return reconstructed_x, mu, logvar
 
-    def reconstruct(self, midi_tensor, save_to_midi=True, save_path="reconstructions/reconstructed.mid"):
-        # Prepare tensor
-        tensor_len = midi_tensor.shape[0]
-        padded_tensor, tensor_len = MidiDataset.collate_fn([(midi_tensor, tensor_len)])
-        padded_tensor = padded_tensor.to(self.device)
+    def reconstruct(self, midi_tensor, bpm, save_to_midi=True, save_path="reconstructions/reconstructed.mid"):
+        self.eval()
+        with torch.no_grad():
+            # Prepare tensor
+            tensor_len = midi_tensor.shape[2]
+            padded_tensor, tensor_len, _ = MidiDataset.collate_fn([(midi_tensor, tensor_len, bpm)])
+            
+            padded_tensor = padded_tensor.to(self.device)
+            tensor_len = tensor_len.to(self.device)
 
-        # Reconstruct sample
-        reconstructed_sample, _, _ = self(padded_tensor, tensor_len)
-        reconstructed_sample = reconstructed_sample.squeeze()
+            # Reconstruct sample
+            reconstructed_sample, _, _ = self(padded_tensor, tensor_len)
+            reconstructed_sample = reconstructed_sample.squeeze()
 
-        reconstructed_sample = torch.clamp(reconstructed_sample, 0.0, 1.0)
+            # 3. Post-process the output tensor
+            # -----------------------------------------------------------------
+            # Clamp values to a valid probability range [0, 1]
+            reconstructed_sample = torch.clamp(reconstructed_sample, 0.0, 1.0)
+            # Apply a threshold to remove low-velocity noise and make the MIDI cleaner
+            reconstructed_sample[reconstructed_sample < 0.05] = 0.0 
+            
+            # 4. Create the multi-instrument MIDI file
+            # -----------------------------------------------------------------
+            midi_reconstruction = pretty_midi.PrettyMIDI()
+            
+            # Define your instrument mapping (INDEX -> General MIDI Program)
+            # This MUST match the order you defined in your dataset.
+            # 0: Drums, 1: Piano, 2: Bass, 3: Guitar, 4: Others (e.g., Strings)
+            # The `is_drum=True` flag is crucial for the drum track.
+            instrument_map = [
+                {'program': 0,  'is_drum': True,  'name': 'Drums'},
+                {'program': 0,  'is_drum': False, 'name': 'Piano'},      # 0: Acoustic Grand Piano
+                {'program': 33, 'is_drum': False, 'name': 'Bass'},       # 33: Electric Bass (finger)
+                {'program': 25, 'is_drum': False, 'name': 'Guitar'},     # 25: Acoustic Guitar (steel)
+                {'program': 48, 'is_drum': False, 'name': 'Others'}      # 48: String Ensemble 1
+            ]
 
-        #Threshold
-        reconstructed_sample[reconstructed_sample < 0.01] = 0.0
-
-        # Transpose to convert into midi
-        reconstructed_sample_T = reconstructed_sample.T
-
-        # Scale back to original velocity
-        # reconstructed_sample_T *= 127
-
-
-        midi = pretty_midi.instrument_name_to_program('Acoustic Grand Piano')
-        instrument = pretty_midi.Instrument(program=midi)
-
-        for pitch_idx in range(reconstructed_sample_T.shape[0]):
-            note_on_time = None
-            peak_velocity_normalized = 0
-
-            for t in range(reconstructed_sample_T.shape[1]):
-                current_velocity_normalized = reconstructed_sample_T[pitch_idx, t].item()
-                is_note_on = current_velocity_normalized > 0.1
-
-                # --- Note On Event ---
-                if is_note_on and note_on_time is None:
-                    note_on_time = t / FS
-                    peak_velocity_normalized = current_velocity_normalized
+            # Iterate through each instrument's pianoroll in the output tensor
+            for i in range(reconstructed_sample.shape[0]):
+                instrument_pianoroll = reconstructed_sample[i, :, :]
+                instrument_info = instrument_map[i]
                 
-                # --- Note Continues ---
-                elif is_note_on and note_on_time is not None:
-                    # Update the peak velocity if the current one is higher
-                    if current_velocity_normalized > peak_velocity_normalized:
-                        peak_velocity_normalized = current_velocity_normalized
-
-                # --- Note Off Event ---
-                elif not is_note_on and note_on_time is not None:
-                    note_off_time = t / FS
-                    
-                    # Un-normalize velocity to MIDI range [0, 127]
-                    velocity_midi = int(peak_velocity_normalized * 127)
-                    if velocity_midi > 127: velocity_midi = 127
-                    if velocity_midi == 0: velocity_midi = 1 # Velocity 0 is note-off
-
-                    note = pretty_midi.Note(
-                        velocity=velocity_midi,
-                        pitch=pitch_idx + MIN_MIDI_NOTE,
-                        start=note_on_time,
-                        end=note_off_time
-                    )
-                    instrument.notes.append(note)
-                    
-                    # Reset for the next note
-                    note_on_time = None
-                    peak_velocity_normalized = 0
-
-            # If a note is still on at the very end of the sequence, close it
-            if note_on_time is not None:
-                note_off_time = reconstructed_sample_T.shape[1] / FS
-                velocity_midi = int(peak_velocity_normalized * 127)
-                if velocity_midi > 127: velocity_midi = 127
-                if velocity_midi == 0: velocity_midi = 1
-
-                note = pretty_midi.Note(
-                    velocity=velocity_midi,
-                    pitch=pitch_idx + MIN_MIDI_NOTE,
-                    start=note_on_time,
-                    end=note_off_time
+                instrument = pretty_midi.Instrument(
+                    program=instrument_info['program'], 
+                    is_drum=instrument_info['is_drum'],
+                    name=instrument_info['name']
                 )
-                instrument.notes.append(note)
+                
+                # This is a robust algorithm to convert a pianoroll matrix to MIDI notes.
+                # It handles note start, end, and velocity correctly.
+                # Transpose to (time, pitch) for easier iteration over time steps
+                pr_T = instrument_pianoroll.cpu().numpy().T 
 
-        midi.instruments.append(instrument)
-        midi.write(save_path)
-        print(f"Reconstructed MIDI saved to {save_path}")
+                for pitch_idx in range(pr_T.shape[1]):
+                    note_on_time = None
+                    peak_velocity_normalized = 0.0
+                    for t in range(pr_T.shape[0]):
+                        current_velocity_normalized = pr_T[t, pitch_idx]
+                        # Use a threshold to decide if a note is "on"
+                        is_note_on = current_velocity_normalized > 0.1
+
+                        # --- Note On Event ---
+                        if is_note_on and note_on_time is None:
+                            note_on_time = t / FS # Convert time step to seconds
+                            peak_velocity_normalized = current_velocity_normalized
+                        
+                        # --- Note Continues ---
+                        elif is_note_on and note_on_time is not None:
+                            # Update the peak velocity if the current one is higher
+                            if current_velocity_normalized > peak_velocity_normalized:
+                                peak_velocity_normalized = current_velocity_normalized
+
+                        # --- Note Off Event ---
+                        elif not is_note_on and note_on_time is not None:
+                            note_off_time = t / FS
+                            velocity_midi = int(peak_velocity_normalized * 127)
+                            
+                            # Add note only if velocity is significant
+                            if velocity_midi > 0:
+                                note = pretty_midi.Note(
+                                    velocity=min(127, velocity_midi),
+                                    pitch=pitch_idx + MIN_MIDI_NOTE,
+                                    start=note_on_time,
+                                    end=note_off_time
+                                )
+                                instrument.notes.append(note)
+                            
+                            # Reset for the next note
+                            note_on_time = None
+                            peak_velocity_normalized = 0.0
+                    
+                    # After the loop, close any note that's still on at the very end
+                    if note_on_time is not None:
+                        note_off_time = pr_T.shape[0] / FS
+                        velocity_midi = int(peak_velocity_normalized * 127)
+                        if velocity_midi > 0:
+                            note = pretty_midi.Note(
+                                velocity=min(127, velocity_midi),
+                                pitch=pitch_idx + MIN_MIDI_NOTE,
+                                start=note_on_time,
+                                end=note_off_time
+                            )
+                            instrument.notes.append(note)
+
+                # Add the completed instrument to the MIDI file
+                midi_reconstruction.instruments.append(instrument)
+
+            # 5. Save the MIDI file to disk
+            # -----------------------------------------------------------------
+            if save_to_midi:
+                # Create directory if it doesn't exist
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                midi_reconstruction.write(save_path)
+                print(f"Reconstructed multi-instrument MIDI saved to {save_path}")
+            
+            return midi_reconstruction
 
 
     def generate(self, num_samples, max_len, z_sample=None, temperature=1.0):

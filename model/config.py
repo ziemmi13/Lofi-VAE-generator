@@ -3,7 +3,7 @@ TRAIN_VALIDATION_SPLIT = 0.9
 BATCH_SIZE = 16
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-2
-NUM_EPOCHS = 500
+NUM_EPOCHS = 10
 LATENT_DIM = 256
 LSTM_LAYERS = 2
 
@@ -15,12 +15,11 @@ MAX_MIDI_NOTE = 108 # C8 (MIDI note number). This is the highest MIDI note we wi
 # The number of unique notes in our piano roll representation.
 # For 88 keys: 108 - 21 + 1 = 88. This is our feature dimension for each time step.
  
-NUM_PITCHES = MAX_MIDI_NOTE - MIN_MIDI_NOTE + 1
-NUM_INSTRUMENTS = 4
+# NUM_PITCHES = MAX_MIDI_NOTE - MIN_MIDI_NOTE + 1
+NUM_PITCHES = 128
+NUM_INSTRUMENTS = 5
 INPUT_DIM = NUM_INSTRUMENTS * NUM_PITCHES
 
-# Dataset Filtering
-MIN_SEQ_LEN_FILTER = 10  # Minimum number of time steps for a sequence to be included.
-MAX_SEQ_LEN_FILTER = 5000 # Maximum number of time steps for a sequence to be included.
+MAX_SEQ_LEN = 3000 
 
 

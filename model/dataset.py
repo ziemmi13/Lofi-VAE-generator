@@ -11,40 +11,15 @@ import pandas as pd
 import numpy as np
 
 class MidiDataset(Dataset):
-    def __init__(self, dataset_dir="dataset"):
+    def __init__(self, dataset_dir="dataset/mini_dataset", verbose=False):
         self.songs_dir = os.path.join(dataset_dir, "all_songs")
         self.df = pd.read_csv(os.path.join(dataset_dir, "midi_metadata.csv"))
-        self.valid_instruments = [
-            "drumms",
-            "piano", # if piano not present check "organ"
-            "bass",
-            "guitar"
-            # "others" - pick one present from "strings", "ensamble", "synth lead", "synth pad"
-        ]
-
-        self.midi_dict = RangeDict([
-                (range(0, 9), "piano"),
-                (range(9, 17), "chromatic percussion"),
-                (range(17, 25), "organ"),
-                (range(25, 33), "guitar"),
-                (range(33, 41), "bass"),
-                (range(41, 49), "strings"),
-                (range(49, 57), "ensemble"),
-                (range(57, 65), "brass"),
-                (range(65, 73), "reed"),
-                (range(73, 81), "pipe"),
-                (range(81, 89), "synth lead"),
-                (range(89, 97), "synth pad"),
-                (range(97, 105), "synth effects"),
-                (range(105, 113), "synth ethnic"),
-                (range(113, 121), "synth percussive"),
-                (range(121, 129), "sound effects"),
-            ])
-
+        self.verbose = verbose
+        
     def __len__(self):
         return len(self.df)
     
-    def __getitem__(self, index, verbose=False):
+    def __getitem__(self, index):
         # Load data from csv
         file_name = self.df.iloc[index, 0]
         file_path = os.path.join(self.songs_dir, file_name)
@@ -52,7 +27,7 @@ class MidiDataset(Dataset):
 
         pianoroll_tensor = self._prepare_pianoroll_tensor(file_path)
         seq_len = pianoroll_tensor.shape[2]
-        if verbose:
+        if self.verbose:
             return pianoroll_tensor, seq_len, bpm, file_name
         return pianoroll_tensor, seq_len, bpm
 
@@ -67,44 +42,51 @@ class MidiDataset(Dataset):
         
         """
         # Load MIDI file
-        midi_file = PrettyMIDI(file_path)
+        try:
+            midi_file = PrettyMIDI(file_path)
+        except Exception as e:
+            print(f"Error loading MIDI file {file_path}: {e}")
+            return torch.zeros((5, NUM_PITCHES, 1), dtype=torch.float32)
 
+        pianorolls = []
         # Convert to pianoroll for each instrument
-        pianorolls = {instrument: None for instrument in self.valid_instruments}
         for instrument in midi_file.instruments:
             pianoroll = instrument.get_piano_roll(fs=FS) 
+            # pianoroll = pianoroll[MIN_MIDI_NOTE:MAX_MIDI_NOTE+1, :]
 
-            instrument_category = self.get_midi_instrument_name(instrument)
-            # Fill the dict with PRESENT instruments
-            if instrument_category in self.valid_instruments:
-                pianoroll = pianoroll[MIN_MIDI_NOTE:MAX_MIDI_NOTE+1, :]
-                pianorolls[instrument] = pianoroll
-
-        # Add padding and fill in missing instruments 
-        longest_instrument_track = int(midi_file.get_end_time()*FS)
-        final_pianorolls = []
-        for instrument in self.valid_instruments:
-            pianoroll = pianorolls.get(instrument)
             # Fill in missing instruments with silence
             if pianoroll is None:
-                silent_pianoroll = np.zeros((NUM_PITCHES, longest_instrument_track), dtype=np.float32)
-                final_pianorolls.append(silent_pianoroll)
-            # Add padding if necessary
+                silent_pianoroll = np.zeros((NUM_PITCHES, 0), dtype=np.float32)
+                pianorolls.append(silent_pianoroll)
             else:
-                if pianoroll.shape[1] < longest_instrument_track:
-                    pad_width = longest_instrument_track - pianoroll.shape[1]
-                    padded_pianoroll = np.pad(pianoroll, ((0, 0), (0, pad_width)), mode='constant')
-                    final_pianorolls.append(padded_pianoroll)
+                pianorolls.append(pianoroll)
+        
+        # Max instrument length
+        max_instrument_len = max(pr.shape[1] for pr in pianorolls)
+        actual_max_len = min(max_instrument_len, MAX_SEQ_LEN)
 
-        # Stack pianorolls into a tensor
-        pianoroll_stack = np.stack(final_pianorolls)
+        # Pad all tracks to the same length (the actual_len of this song)
+        padded_pianorolls = []
+        for pr in pianorolls:
+            # Truncate if necessary
+            pr_truncated = pr[:, :actual_max_len]
+            
+            # Pad if this specific track is shorter than the longest track in the song
+            if pr_truncated.shape[1] < actual_max_len:
+                pad_width = actual_max_len - pr_truncated.shape[1]
+                padded_pr = np.pad(pr_truncated, ((0, 0), (0, pad_width)), mode='constant')
+                padded_pianorolls.append(padded_pr)
+            else:
+                padded_pianorolls.append(pr_truncated)
+        
+        # Stack the consistently-sized pianorolls for this song
+        pianoroll_stack = np.stack(padded_pianorolls)
 
-        # Reshape
-        transposed_pianorolls = torch.tensor(pianoroll_stack, dtype=torch.float32)
-        # Normalize velocities into <0,1> (max vel = 127) 
-        transposed_pianorolls /= 127
+        # Convert to tensor and normalize velocities to <0, 1>
+        pianoroll_tensor = torch.tensor(pianoroll_stack, dtype=torch.float32)
+        pianoroll_tensor /= 127.0 # Use float division
 
-        return transposed_pianorolls
+        return pianoroll_tensor
     
     def extract_chords(self, file_path):
         """
@@ -128,14 +110,6 @@ class MidiDataset(Dataset):
 
                 chord_progression.append([root_note, full_chord_name, offset])
         return chord_progression
-    
-    def get_midi_instrument_name(self, instrument):
-        idx = instrument.program
-        if instrument.is_drum:
-            return "drumms" 
-        else:
-            return self.midi_dict[idx]
-        
     
     @staticmethod
     def collate_fn(batch):
@@ -192,28 +166,13 @@ def setup_datasets_and_dataloaders(dataset_dir):
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=MidiDataset.collate_fn)
     val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=MidiDataset.collate_fn)
 
-    print("Finished setting up datasets and dataloaders.")
-    return train_dataloader, val_dataloader\
-    
-class RangeDict:
-    def __init__(self, ranges):
-        """
-        Initialize with an iterable of (range, value) pairs.
-        """
-        self.ranges = list(ranges)
-
-    def __getitem__(self, key):
-        for rng, value in self.ranges:
-            if key in rng:
-                return value
-        raise KeyError(f"{key} not found in any range.")
+    print("Finished setting up datasets and dataloaders.\n")
+    return train_dataloader, val_dataloader
 
 # Sanity check
 # dataset = MidiDataset()
 
-# for i in range(5):
+# for i in range(100):
 #     print(dataset[i][0].shape)
-#     print()
 #     print(50*"_")
-#     print()
 
