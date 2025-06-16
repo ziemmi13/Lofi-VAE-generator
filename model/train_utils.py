@@ -1,5 +1,7 @@
 import torch
 import numpy as np
+from comet_ml import Experiment
+import os
 
 class EarlyStopping:
     def __init__(self, patience=5, delta=0.0, path='checkpoints/checkpoint.pt', verbose=False):
@@ -29,6 +31,14 @@ class EarlyStopping:
             print(f"Validation loss decreased. Saving model to {self.path}")
 
 
-class CommetLogger:
-    def __init__(self, ):
-        pass
+def setup_commet_loger(experiment_name, project_name="LOFI-VAE-generator"):
+    experiment = Experiment(
+        api_key=os.getenv("COMET_API_KEY"),
+        project_name=project_name
+    )
+
+    experiment.set_name(experiment_name)
+
+    return experiment
+
+

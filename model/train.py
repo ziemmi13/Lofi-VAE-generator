@@ -2,9 +2,9 @@ import torch
 from config import *
 from dataset import setup_datasets_and_dataloaders
 from loss import compute_loss
-from train_utils import EarlyStopping
+from train_utils import EarlyStopping, setup_commet_loger
 
-def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lofi-model.pth"):
+def train(model, dataset_dir, experiment_name, verbose=True, model_save_path = "./saved_models/lofi-model.pth"):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using {device} device")
     model.to(device)
@@ -14,6 +14,7 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
     train_dataloader, val_dataloader = setup_datasets_and_dataloaders(dataset_dir)
     
     early_stopper = EarlyStopping(patience=5, path="checkpoints/best_model.pt")
+    experiment = setup_commet_loger(experiment_name)
 
     print("Starting training:")
     print(f"The datset has {len(train_dataloader)} batches")
@@ -25,6 +26,7 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
         train_loss_KL = 0
 
         print(f'Epoch [{epoch + 1}/{NUM_EPOCHS}]')
+        print("Training:")
         for batch_idx, (sequences, lengths, bpm) in enumerate(train_dataloader):
             sequences = sequences.to(device)
 
@@ -44,25 +46,27 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
-            # if verbose:
-            #     if batch_idx % 100 == 0:
-            #         print(f'\tBatch index: {batch_idx+1}/{len(train_dataloader)}')
-            #         print(f'\tCurrent training Loss: {train_loss:.4f}')
+            if verbose:
+                if batch_idx % 100 == 0:
+                    print(f'\tBatch index: {batch_idx+1}/{len(train_dataloader)}')
+                    print(f'\tCurrent training Loss: {train_loss:.4f}')
+                    print(f'\tCurrent training Reconstruction Loss: {train_loss_reconstruction:.4f}')
+                    print(f'\tCurrent training KL Loss: {train_loss_KL:.4f}')
 
         epoch_loss = train_loss / len(train_dataloader)
         epoch_reconstruction_loss = train_loss_reconstruction / len(train_dataloader)
         epoch_KL = train_loss_KL / len(train_dataloader)
-        # # Log epoch metrics
-        # experiment.log_metric("epoch_train_loss", epoch_loss, step=epoch)
-        # experiment.log_metric("epoch_train_loss_reconstruction", epoch_reconstruction_loss, step=epoch)
-        # experiment.log_metric("epoch_train_loss_KL", epoch_KL, step=epoch)
+        # Log epoch metrics
+        experiment.log_metric("epoch_train_loss", epoch_loss, step=epoch)
+        experiment.log_metric("epoch_train_loss_reconstruction", epoch_reconstruction_loss, step=epoch)
+        experiment.log_metric("epoch_train_loss_KL", epoch_KL, step=epoch)
 
         # Validation phase
         model.eval()
         val_loss = 0
         val_loss_reconstruction = 0
         val_loss_KL = 0
-        # print("Validating:")
+        print("Validating:")
         with torch.no_grad():
             for batch_idx, (sequences, lengths, bpm) in enumerate(val_dataloader):
                 sequences = sequences.to(device)
@@ -86,23 +90,17 @@ def train(model, dataset_dir, verbose=True, model_save_path = "./saved_models/lo
         val_epoch_KL_loss = val_loss_KL / len(val_dataloader)
         
         if verbose:
-            # print(f'Epoch [{epoch + 1}/{NUM_EPOCHS}]')
-            # print(f'Training Loss: {epoch_loss:.4f}')
-            # print(f'Reconstruction Loss: {val_epoch_reconstruction_loss:.4f}')
-            # print(f'KL Loss: {val_epoch_KL_loss:.4f}')
-            # print()
+            print(f'Validation Reconstruction Loss: {val_epoch_reconstruction_loss:.4f}')
+            print(f'Validation KL Loss: {val_epoch_KL_loss:.4f}')
             print(f'Validation Loss: {val_epoch_loss:.4f}')
-            print('-' * 60, "\n")
+            print('_' * 60, "\n")
 
-        # # Log validation metrics
-        # experiment.log_metric("val_loss", val_epoch_loss, step=epoch)
-        # experiment.log_metric("epoch_val_loss_reconstruction", val_epoch_reconstruction_loss, step=epoch)
-        # experiment.log_metric("epoch_val_loss_KL", val_epoch_KL, step=epoch)
+        # Log validation metrics
+        experiment.log_metric("val_loss", val_epoch_loss, step=epoch)
+        experiment.log_metric("epoch_val_loss_reconstruction", val_epoch_reconstruction_loss, step=epoch)
+        experiment.log_metric("epoch_val_loss_KL", val_epoch_KL_loss, step=epoch)
 
-        # Early stopping
-
-
-        # Saving the trained model
+        # Early stopping and saving the trained model
         early_stopper(val_epoch_loss, model)
         if early_stopper.early_stop:
             print("Early stopping triggered.")

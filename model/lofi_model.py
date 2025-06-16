@@ -78,6 +78,7 @@ class LofiModel(nn.Module):
             reconstructed_sample, _, _ = self(padded_tensor, tensor_len)
             reconstructed_sample = reconstructed_sample.squeeze()
 
+
             # 3. Post-process the output tensor
             # -----------------------------------------------------------------
             # Clamp values to a valid probability range [0, 1]

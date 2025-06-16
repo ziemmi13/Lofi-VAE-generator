@@ -11,10 +11,11 @@ import pandas as pd
 import numpy as np
 
 class MidiDataset(Dataset):
-    def __init__(self, dataset_dir="dataset/mini_dataset", verbose=False):
+    def __init__(self, dataset_dir="dataset/transformed_dataset", verbose=False):
         self.songs_dir = os.path.join(dataset_dir, "all_songs")
-        self.df = pd.read_csv(os.path.join(dataset_dir, "midi_metadata.csv"))
+        self.df = pd.read_csv(os.path.join(dataset_dir, "midi_metadata_clean.csv"))
         self.verbose = verbose
+        self.count = 0
         
     def __len__(self):
         return len(self.df)
@@ -47,27 +48,35 @@ class MidiDataset(Dataset):
         except Exception as e:
             print(f"Error loading MIDI file {file_path}: {e}")
             return torch.zeros((5, NUM_PITCHES, 1), dtype=torch.float32)
-
+        
         pianorolls = []
         # Convert to pianoroll for each instrument
         for instrument in midi_file.instruments:
-            pianoroll = instrument.get_piano_roll(fs=FS) 
             # pianoroll = pianoroll[MIN_MIDI_NOTE:MAX_MIDI_NOTE+1, :]
 
-            # Fill in missing instruments with silence
-            if pianoroll is None:
-                silent_pianoroll = np.zeros((NUM_PITCHES, 0), dtype=np.float32)
+            # If the pianoroll is empty
+            if len(instrument.notes) == 1:
+                silent_pianoroll = np.zeros((NUM_PITCHES, 1), dtype=np.float32)
                 pianorolls.append(silent_pianoroll)
             else:
+                if instrument.is_drum:
+                    pianoroll = self.drum_to_pianoroll(instrument)
+                else:
+                    pianoroll = instrument.get_piano_roll(fs=FS) 
+
                 pianorolls.append(pianoroll)
-        
+
+    
+        if len(midi_file.instruments) < 5:
+            pianorolls = torch.zeros(NUM_INSTRUMENTS, NUM_PITCHES, 1)
+
         # Max instrument length
         max_instrument_len = max(pr.shape[1] for pr in pianorolls)
         actual_max_len = min(max_instrument_len, MAX_SEQ_LEN)
 
-        # Pad all tracks to the same length (the actual_len of this song)
+        # Pad all tracks to the same length (the actual_len of the song)
         padded_pianorolls = []
-        for pr in pianorolls:
+        for i, pr in enumerate(pianorolls):
             # Truncate if necessary
             pr_truncated = pr[:, :actual_max_len]
             
@@ -110,6 +119,27 @@ class MidiDataset(Dataset):
 
                 chord_progression.append([root_note, full_chord_name, offset])
         return chord_progression
+
+    def drum_to_pianoroll(self, instrument):
+        """
+        Create a pianoroll for a drum track manually because for instrument.is_drum 
+        the function: instrument.get_pianoroll() doesn't work.
+        """
+        end_time = max(note.end for note in instrument.notes)
+        n_frames = int(end_time * FS) + 1
+        pianoroll = np.zeros((NUM_PITCHES, n_frames))  # General MIDI has 128 possible pitches
+
+        for note in instrument.notes:
+            start = int(note.start * FS)
+            end = int(note.end * FS)
+            pitch = note.pitch
+            velocity = note.velocity
+            
+            # Fill values in the piano roll
+            pianoroll[pitch, start:end] = velocity
+
+        return pianoroll
+
     
     @staticmethod
     def collate_fn(batch):
@@ -134,14 +164,9 @@ class MidiDataset(Dataset):
         # Extract tensors, lenghts, bpms
         tensors, lengths, bpms = zip(*batch)
 
-        # Max len in the batch
-        num_instruments = tensors[0].shape[0]
-        num_pitches = tensors[0].shape[1]
-        max_len = max(lengths)
-
         # Create a batch of tensors of zeros for padding. All tensors will be padded to `max_len`.
         batch_size = len(tensors)
-        padded_batch = torch.zeros(batch_size, num_instruments, num_pitches, max_len, dtype=torch.float32)
+        padded_batch = torch.zeros(batch_size, NUM_INSTRUMENTS, NUM_PITCHES, MAX_SEQ_LEN, dtype=torch.float32)
         
         # Fill the padded tensor with the actual sequence data.
         for i, tensor in enumerate(tensors):
