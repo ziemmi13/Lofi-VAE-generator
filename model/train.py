@@ -3,6 +3,7 @@ from config import *
 from dataset import setup_datasets_and_dataloaders
 from loss import compute_loss
 from train_utils import EarlyStopping, setup_commet_loger
+from config import *
 
 def train(model, dataset_dir, experiment_name, verbose=True, model_save_path = "./saved_models/lofi-model.pth"):
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -48,10 +49,19 @@ def train(model, dataset_dir, experiment_name, verbose=True, model_save_path = "
 
             if verbose:
                 if batch_idx % 100 == 0:
+                    avg_train_loss = train_loss / (batch_idx + 1)
+                    avg_train_loss_recon = train_loss_reconstruction / (batch_idx + 1)
+                    avg_train_loss_KL = train_loss_KL / (batch_idx + 1)
+
                     print(f'\tBatch index: {batch_idx+1}/{len(train_dataloader)}')
-                    print(f'\tCurrent training Loss: {train_loss:.4f}')
-                    print(f'\tCurrent training Reconstruction Loss: {train_loss_reconstruction:.4f}')
-                    print(f'\tCurrent training KL Loss: {train_loss_KL:.4f}')
+                    print(f'\tCurrent training Loss: {avg_train_loss:.4f}')
+                    print(f'\tCurrent training Reconstruction Loss: {avg_train_loss_recon:.4f}')
+                    print(f'\tCurrent training KL Loss: {avg_train_loss_KL:.4f}')
+
+                    experiment.log_metric("batch_train_loss", avg_train_loss, step=epoch * len(train_dataloader) + batch_idx)
+                    experiment.log_metric("batch_train_loss_reconstruction", avg_train_loss_recon, step=epoch * len(train_dataloader) + batch_idx)
+                    experiment.log_metric("batch_train_loss_KL", avg_train_loss_KL, step=epoch * len(train_dataloader) + batch_idx)
+
 
         epoch_loss = train_loss / len(train_dataloader)
         epoch_reconstruction_loss = train_loss_reconstruction / len(train_dataloader)

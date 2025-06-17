@@ -127,7 +127,7 @@ class MidiDataset(Dataset):
         """
         end_time = max(note.end for note in instrument.notes)
         n_frames = int(end_time * FS) + 1
-        pianoroll = np.zeros((NUM_PITCHES, n_frames))  # General MIDI has 128 possible pitches
+        pianoroll = np.zeros((NUM_PITCHES, n_frames)) 
 
         for note in instrument.notes:
             start = int(note.start * FS)
@@ -193,11 +193,4 @@ def setup_datasets_and_dataloaders(dataset_dir):
 
     print("Finished setting up datasets and dataloaders.\n")
     return train_dataloader, val_dataloader
-
-# Sanity check
-# dataset = MidiDataset()
-
-# for i in range(100):
-#     print(dataset[i][0].shape)
-#     print(50*"_")
 
