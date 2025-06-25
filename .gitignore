@@ -12,8 +12,10 @@ Untitled-1.ipynb
 midi_read.py
 model/__pycache__
 model/saved_models/
-model/generated_midi_samples
 model/utils/
 model/checkpoints/
 midi_lstm
 model/reconstructions
+generated_samples
+generated/
+reconstructed/

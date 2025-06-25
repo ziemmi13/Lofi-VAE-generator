@@ -29,7 +29,8 @@ class MidiDataset(Dataset):
         pianoroll_tensor = self._prepare_pianoroll_tensor(file_path)
         seq_len = pianoroll_tensor.shape[2]
         if self.verbose:
-            return pianoroll_tensor, seq_len, bpm, file_name
+            clean_file_name = os.path.splitext(file_name)[0]    
+            return pianoroll_tensor, seq_len, bpm, clean_file_name
         return pianoroll_tensor, seq_len, bpm
 
     def _prepare_pianoroll_tensor(self, file_path):

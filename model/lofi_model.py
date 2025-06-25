@@ -19,7 +19,7 @@ class LofiModel(nn.Module):
 
         # The Encoder and Decoder are instantiated with the new flattened input_dim
         self.encoder = Encoder(input_dim=self.input_dim, hidden_dim=LATENT_DIM, latent_dim=LATENT_DIM, num_layers=LSTM_LAYERS)
-        self.decoder = Decoder(rnn_input_dim=self.input_dim,
+        self.decoder = Decoder(lstm_input_dim=self.input_dim,
                                lstm_hidden_dim=LATENT_DIM,
                                z_latent_dim=LATENT_DIM,
                                output_dim=self.input_dim,
@@ -64,7 +64,7 @@ class LofiModel(nn.Module):
 
         return reconstructed_x, mu, logvar
 
-    def reconstruct(self, midi_tensor, bpm, save_to_midi=True, save_path="reconstructions/reconstructed.mid"):
+    def reconstruct(self, midi_tensor, bpm, save_to_midi=True, save_path="reconstructed/"):
         self.eval()
         with torch.no_grad():
             # Prepare tensor
@@ -78,33 +78,72 @@ class LofiModel(nn.Module):
             reconstructed_sample, _, _ = self(padded_tensor, tensor_len)
             reconstructed_sample = reconstructed_sample.squeeze()
 
+            # Prepare for MIDI conversion
+            reconstructed_sample = torch.clamp(reconstructed_sample, 0.0, 1.0) # Normalize to [0, 1]
+            reconstructed_sample[reconstructed_sample < 0.05] = 0.0 # Threshold to remove noise
 
-            # 3. Post-process the output tensor
-            # -----------------------------------------------------------------
-            # Clamp values to a valid probability range [0, 1]
-            reconstructed_sample = torch.clamp(reconstructed_sample, 0.0, 1.0)
-            # Apply a threshold to remove low-velocity noise and make the MIDI cleaner
-            reconstructed_sample[reconstructed_sample < 0.05] = 0.0 
+            # Convert tensor to MIDI file
+            midi_file = self.tensor_to_midi(reconstructed_sample, save_to_midi, save_path)
+            return reconstructed_sample, midi_file if save_to_midi else None
+
+    def generate(self, num_samples, max_len, z_sample=None, temperature=1.0, threshold=0.01, save_to_midi=True, save_path="generated_sample.mid"):
+        self.eval()
+        with torch.no_grad():
+            # 1. --- FIX: Ensure z_sample has a batch dimension ---
+            if z_sample is None:
+                # Shape is now (num_samples, LATENT_DIM)
+                z_sample = torch.randn(num_samples, LATENT_DIM).to(self.device)
+            else:
+                z_sample = z_sample.to(self.device)
+                if z_sample.dim() == 1: # Add batch dim if a single z is provided
+                    z_sample = z_sample.unsqueeze(0)
             
-            # 4. Create the multi-instrument MIDI file
-            # -----------------------------------------------------------------
-            midi_reconstruction = pretty_midi.PrettyMIDI()
+            # 2. Generate from latent vector
+            # The decoder now handles the batch dimension correctly
+            generated_flat = self.decoder.generate_from_latent(z_sample, max_len, self.device, temperature)
+
+            # 3. Reshape back to the pianoroll format (B, I, P, T)
+            generated_pianoroll = generated_flat.view(num_samples, max_len, self.num_instruments, self.num_pitches)
+            generated_pianoroll = generated_pianoroll.permute(0, 2, 3, 1).contiguous()
+
+            # Process and save each sample in the batch
+            midi_files = []
+            for i in range(num_samples):
+                single_pianoroll = generated_pianoroll[i] # Get the i-th sample
+                
+                # Threshold to remove noise
+                single_pianoroll[single_pianoroll < threshold] = 0.0
+
+                if save_to_midi:
+                    # Adjust save path for multiple samples
+                    current_save_path = save_path
+                    if num_samples > 1:
+                        path_parts = os.path.splitext(save_path)
+                        current_save_path = f"{path_parts[0]}_{i}{path_parts[1]}"
+
+                    midi_file = self.tensor_to_midi(single_pianoroll, save_to_midi=True, save_path=current_save_path)
+                    midi_files.append(midi_file)
             
-            # Define your instrument mapping (INDEX -> General MIDI Program)
-            # This MUST match the order you defined in your dataset.
-            # 0: Drums, 1: Piano, 2: Bass, 3: Guitar, 4: Others (e.g., Strings)
-            # The `is_drum=True` flag is crucial for the drum track.
+            # Return the generated tensor and the list of MIDI files
+            return generated_pianoroll, midi_files if save_to_midi else None
+
+    def tensor_to_midi(self, tensor, save_to_midi, save_path):
+            midi_file = pretty_midi.PrettyMIDI()
+            
+            # Instrument mapping for midi 
             instrument_map = [
-                {'program': 0,  'is_drum': True,  'name': 'Drums'},
+                {'program': 0,  'is_drum': True,  'name': 'Drums'},      # 0: Standard Drum Kit
                 {'program': 0,  'is_drum': False, 'name': 'Piano'},      # 0: Acoustic Grand Piano
                 {'program': 33, 'is_drum': False, 'name': 'Bass'},       # 33: Electric Bass (finger)
                 {'program': 25, 'is_drum': False, 'name': 'Guitar'},     # 25: Acoustic Guitar (steel)
                 {'program': 48, 'is_drum': False, 'name': 'Others'}      # 48: String Ensemble 1
             ]
 
-            # Iterate through each instrument's pianoroll in the output tensor
-            for i in range(reconstructed_sample.shape[0]):
-                instrument_pianoroll = reconstructed_sample[i, :, :]
+            print(f"{tensor.shape=}, {tensor.dtype=}, {tensor.device=}")
+
+            # Iterate through each instrument's pianoroll in the givem tensor
+            for i in range(tensor.shape[0]):
+                instrument_pianoroll = tensor[i, :, :]
                 instrument_info = instrument_map[i]
                 
                 instrument = pretty_midi.Instrument(
@@ -113,9 +152,7 @@ class LofiModel(nn.Module):
                     name=instrument_info['name']
                 )
                 
-                # This is a robust algorithm to convert a pianoroll matrix to MIDI notes.
-                # It handles note start, end, and velocity correctly.
-                # Transpose to (time, pitch) for easier iteration over time steps
+                # Convert pioanoroll to MIDI 
                 pr_T = instrument_pianoroll.cpu().numpy().T 
 
                 for pitch_idx in range(pr_T.shape[1]):
@@ -170,104 +207,14 @@ class LofiModel(nn.Module):
                             instrument.notes.append(note)
 
                 # Add the completed instrument to the MIDI file
-                midi_reconstruction.instruments.append(instrument)
+                midi_file.instruments.append(instrument)
 
-            # 5. Save the MIDI file to disk
-            # -----------------------------------------------------------------
+            # Save MIDI file
             if save_to_midi:
-                # Create directory if it doesn't exist
-                os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                midi_reconstruction.write(save_path)
-                print(f"Reconstructed multi-instrument MIDI saved to {save_path}")
+                midi_file.write(save_path)
+                print(f"MIDI saved to {save_path}")
             
-            return midi_reconstruction
-
-
-    def generate(self, num_samples, max_len, z_sample=None, temperature=1.0):
-        """
-        Generates new sequences from the model.
-
-        Args:
-            num_samples (int): Number of sequences to generate.
-            max_len (int): Maximum length of the generated sequences.
-            z_sample (torch.Tensor, optional): A specific latent vector (or batch of vectors)
-                                               to decode. If None, samples from prior.
-                                               Shape: (num_samples, latent_dim) or (latent_dim).
-            temperature (float): Softmax temperature for sampling (if output is categorical).
-                                 Not directly used in this continuous output example, but
-                                 good to keep in mind for variants. For continuous outputs,
-                                 it could scale noise if you were adding any.
-
-        Returns:
-            torch.Tensor: Generated sequences (num_samples, max_len, output_feature_dim).
-        """
-        self.eval() 
-        with torch.no_grad(): 
-            if z_sample is None:
-                # Sample z from the prior distribution (standard Gaussian)
-                z = torch.randn(num_samples, LATENT_DIM).to(self.device)
-            else:
-                z = z_sample.to(self.device)
-                if z.ndim == 1: # If a single z vector is provided for one sample
-                    z = z.unsqueeze(0)
-                if z.shape[0] != num_samples:
-                    print(f"Warning: num_samples ({num_samples}) does not match z_sample batch size ({z.shape[0]}). Using z_sample batch size.")
-                    num_samples = z.shape[0]
-                if z.shape[1] != self.decoder.z_latent_dim:
-                    raise ValueError(f"Provided z_sample has latent_dim {z.shape[1]}, expected {self.decoder.z_latent_dim}")
-
-
-            # Project latent vector z to initial hidden and cell states for the LSTM
-            # h_flat/c_flat shape: (num_samples, num_layers * lstm_hidden_dim)
-            initial_hidden_flat = self.decoder.latent_to_hidden(z)
-            initial_cell_flat = self.decoder.latent_to_cell(z)
-
-            # Reshape to (num_layers, num_samples, lstm_hidden_dim) for LSTM
-            h_t = initial_hidden_flat.view(num_samples, self.decoder.num_layers, self.decoder.lstm_hidden_dim).permute(1, 0, 2).contiguous()
-            c_t = initial_cell_flat.view(num_samples, self.decoder.num_layers, self.decoder.lstm_hidden_dim).permute(1, 0, 2).contiguous()
-
-            # Initial input token for the LSTM.
-            # A common choice is a zero vector.
-            # Shape: (num_samples, 1, rnn_input_dim)
-            # self.decoder.lstm.input_size is rnn_input_dim (which is INPUT_DIM)
-            current_input_token = torch.zeros(num_samples, 1, self.decoder.lstm.input_size).to(self.device)
-
-            generated_sequence_parts = []
-
-            for _ in range(max_len):
-                # LSTM forward pass for one step
-                # lstm_out shape: (num_samples, 1, lstm_hidden_dim)
-                # h_t, c_t will be updated to the next states
-                lstm_out, (h_t, c_t) = self.decoder.lstm(current_input_token, (h_t, c_t))
-
-                # Pass LSTM output through the final fully connected layer
-                # lstm_out.squeeze(1) shape: (num_samples, lstm_hidden_dim)
-                # output_token_features shape: (num_samples, output_feature_dim)
-                output_token_features = self.decoder.fc_out(lstm_out.squeeze(1))
-
-                # --- Post-processing of output_token_features ---
-                # If your output represents probabilities (e.g., for a piano roll),
-                # you should apply a sigmoid activation.
-                # If your model was trained with nn.BCEWithLogitsLoss, then fc_out produces logits,
-                # and you should apply sigmoid here.
-                # If your model was trained with nn.MSELoss on data already in [0,1],
-                # a sigmoid here might still be beneficial to ensure output is in range.
-                output_token_processed = torch.sigmoid(output_token_features)
-                # output_token_processed = output_token_features # If no sigmoid is desired / already handled
-
-                generated_sequence_parts.append(output_token_processed.unsqueeze(1)) # Shape: (num_samples, 1, output_feature_dim)
-
-                # The next input to the LSTM is the output we just generated.
-                # It must have the shape (num_samples, 1, rnn_input_dim)
-                # This assumes self.decoder.output_feature_dim == self.decoder.lstm.input_size (INPUT_DIM)
-                current_input_token = output_token_processed.unsqueeze(1)
-
-            # Concatenate all generated steps along the sequence length dimension
-            # Result shape: (num_samples, max_len, output_feature_dim)
-            final_generated_sequence = torch.cat(generated_sequence_parts, dim=1)
-
-        # self.train() # Optional: set back to train mode if you plan to continue training
-        return final_generated_sequence
+            return midi_file
 
 
 class Encoder(nn.Module):
@@ -300,13 +247,14 @@ class Encoder(nn.Module):
         return mu, logvar
 
 class Decoder(nn.Module):
-    def __init__(self, rnn_input_dim, lstm_hidden_dim, z_latent_dim, output_dim, num_layers, dropout=0.1):
+    def __init__(self, lstm_input_dim, lstm_hidden_dim, z_latent_dim, output_dim, num_layers, dropout=0.1):
         super(Decoder, self).__init__()
         self.lstm_hidden_dim = lstm_hidden_dim
         self.num_layers = num_layers
+        self.lstm_input_dim = lstm_input_dim    
         self.latent_to_hidden = nn.Linear(z_latent_dim, num_layers * lstm_hidden_dim)
         self.latent_to_cell = nn.Linear(z_latent_dim, num_layers * lstm_hidden_dim)
-        self.lstm = nn.LSTM(input_size=rnn_input_dim,
+        self.lstm = nn.LSTM(input_size=lstm_input_dim,
                               hidden_size=lstm_hidden_dim,
                               num_layers=num_layers,
                               batch_first=True,
@@ -343,3 +291,46 @@ class Decoder(nn.Module):
         # reconstructed_x shape: (batch_size, max_seq_len, output_feature_dim)
         reconstructed_x = self.fc_out(output)
         return reconstructed_x
+
+    def generate_from_latent(self, z, max_len, device, temperature=1.0):
+        # THIS METHOD IS FOR AUTOREGRESSIVE GENERATION
+        batch_size = z.size(0)
+        
+        # 1. Project latent vector z to initial hidden and cell states
+        initial_hidden_flat = self.latent_to_hidden(z)
+        initial_cell_flat = self.latent_to_cell(z)
+        
+        # Reshape for LSTM: (num_layers, batch_size, lstm_hidden_dim)
+        h_t = initial_hidden_flat.view(batch_size, self.num_layers, self.lstm_hidden_dim).permute(1, 0, 2).contiguous()
+        c_t = initial_cell_flat.view(batch_size, self.num_layers, self.lstm_hidden_dim).permute(1, 0, 2).contiguous()
+        
+        # 2. Initialize the first input step (start token) as a tensor of zeros
+        # Shape: (batch_size, 1, rnn_input_dim)
+        input_t = torch.zeros(batch_size, 1, self.lstm_input_dim).to(device)
+        
+        outputs = []
+        # 3. Autoregressive loop
+        for _ in range(max_len):
+            # Pass current input and hidden state to LSTM
+            # output_t shape: (batch_size, 1, lstm_hidden_dim)
+            # h_t, c_t are updated for the next step
+            output_t, (h_t, c_t) = self.lstm(input_t, (h_t, c_t))
+            
+            # Pass LSTM output to the final linear layer
+            # prediction_logits shape: (batch_size, 1, output_dim)
+            prediction_logits = self.fc_out(output_t)
+
+            # Apply temperature and sigmoid to get the next step's input
+            # This turns the logits into a probability-like pianoroll slice
+            # next_input = torch.sigmoid(prediction_logits / temperature)
+            
+            # Store the prediction for this step (after activation)
+            outputs.append(prediction_logits)
+            
+            # Set the input for the next time step
+            input_t = prediction_logits
+
+        # Concatenate all the generated steps along the time dimension (dim=1)
+        generated_sequence = torch.cat(outputs, dim=1)
+        
+        return generated_sequence
