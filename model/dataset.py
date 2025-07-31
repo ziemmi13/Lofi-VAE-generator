@@ -64,6 +64,7 @@ class MidiDataset(Dataset):
                     pianoroll = self.drum_to_pianoroll(instrument)
                 else:
                     pianoroll = instrument.get_piano_roll(fs=FS) 
+                    pianoroll = pianoroll[MIN_MIDI_NOTE:MAX_MIDI_NOTE+1, :] 
 
                 pianorolls.append(pianoroll)
 
@@ -137,8 +138,11 @@ class MidiDataset(Dataset):
             velocity = note.velocity
             
             # Fill values in the piano roll
-            pianoroll[pitch, start:end] = velocity
+            # pianoroll[pitch, start:end] = velocity
+            if MIN_MIDI_NOTE <= pitch <= MAX_MIDI_NOTE:
+                pianoroll[pitch - MIN_MIDI_NOTE, start:end] = velocity
 
+            
         return pianoroll
 
     
@@ -189,7 +193,7 @@ def setup_datasets_and_dataloaders(dataset_dir):
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=MidiDataset.collate_fn)
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=MidiDataset.collate_fn)
     val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=MidiDataset.collate_fn)
 
     print("Finished setting up datasets and dataloaders.\n")

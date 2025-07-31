@@ -32,12 +32,16 @@ class EarlyStopping:
 
 
 def setup_commet_loger(experiment_name, project_name="LOFI-VAE-generator"):
+    print(f"Setting up Comet experiment: {experiment_name}")
+
     experiment = Experiment(
         api_key=os.getenv("COMET_API_KEY"),
         project_name=project_name
     )
 
     experiment.set_name(experiment_name)
+    print("Comet experiment setup complete.\n")
+    print(80*"_", "\n")
 
     return experiment
 
