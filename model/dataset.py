@@ -1,19 +1,16 @@
 from pretty_midi import PrettyMIDI
 import torch
 from torch.utils.data import Dataset, DataLoader
-from glob import glob
 from config import *
 from torch.utils.data import random_split
-import torch.nn.functional as F
-from music21 import converter, tempo
 import os
 import pandas as pd
-import numpy as np
+from utils import drum_to_pianoroll
 
 class MidiDataset(Dataset):
-    def __init__(self, dataset_dir="dataset/transformed_dataset", verbose=False):
+    def __init__(self, dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\PROJEKT ZESPOLOWY\dataset\golden_dataset", verbose=False):
         self.songs_dir = os.path.join(dataset_dir, "all_songs")
-        self.df = pd.read_csv(os.path.join(dataset_dir, "midi_metadata_clean.csv"))
+        self.df = pd.read_csv(os.path.join(dataset_dir, "midi_metadata.csv"))
         self.verbose = verbose
         self.count = 0
         
@@ -26,21 +23,22 @@ class MidiDataset(Dataset):
         file_path = os.path.join(self.songs_dir, file_name)
         bpm = int(round(self.df.iloc[index, 3]))
 
-        pianoroll_tensor = self._prepare_pianoroll_tensor(file_path)
-        seq_len = pianoroll_tensor.shape[2]
+        drumms_tensor = self._prepare_pianoroll_tensor(file_path)
+        seq_len = drumms_tensor.shape[1]
         if self.verbose:
             clean_file_name = os.path.splitext(file_name)[0]    
-            return pianoroll_tensor, seq_len, bpm, clean_file_name
-        return pianoroll_tensor, seq_len, bpm
+            return drumms_tensor, seq_len, bpm, clean_file_name
+        return drumms_tensor, seq_len, bpm
 
     def _prepare_pianoroll_tensor(self, file_path):
         """
-        Prepares MIDI file to be procesed by the VAE model
+        Prepares MIDI file to be procesed by the VAE model.
+        Only drumms are considered.
         Args:
             file_path (str): MIDI file path
 
         Returns:
-            torch.Tensor: Tensor representation of the pianoroll (NUM_INSTRUMENTS, NUM_PITCHES, time).
+            torch.Tensor: Tensor representation of the pianoroll (NUM_PITCHES, time).
         
         """
         # Load MIDI file
@@ -48,99 +46,18 @@ class MidiDataset(Dataset):
             midi_file = PrettyMIDI(file_path)
         except Exception as e:
             print(f"Error loading MIDI file {file_path}: {e}")
-            return torch.zeros((5, NUM_PITCHES, 1), dtype=torch.float32)
+            return torch.zeros((NUM_PITCHES, MAX_SEQ_LEN), dtype=torch.float32)
         
-        pianorolls = []
         # Convert to pianoroll for each instrument
         for instrument in midi_file.instruments:
-            # pianoroll = pianoroll[MIN_MIDI_NOTE:MAX_MIDI_NOTE+1, :]
-
-            # If the pianoroll is empty
-            if len(instrument.notes) == 1:
-                silent_pianoroll = np.zeros((NUM_PITCHES, 1), dtype=np.float32)
-                pianorolls.append(silent_pianoroll)
-            else:
-                if instrument.is_drum:
-                    pianoroll = self.drum_to_pianoroll(instrument)
-                else:
-                    pianoroll = instrument.get_piano_roll(fs=FS) 
-
-                pianorolls.append(pianoroll)
-
-    
-        if len(midi_file.instruments) < 5:
-            pianorolls = torch.zeros(NUM_INSTRUMENTS, NUM_PITCHES, 1)
-
-        # Max instrument length
-        max_instrument_len = max(pr.shape[1] for pr in pianorolls)
-        actual_max_len = min(max_instrument_len, MAX_SEQ_LEN)
-
-        # Pad all tracks to the same length (the actual_len of the song)
-        padded_pianorolls = []
-        for i, pr in enumerate(pianorolls):
-            # Truncate if necessary
-            pr_truncated = pr[:, :actual_max_len]
-            
-            # Pad if this specific track is shorter than the longest track in the song
-            if pr_truncated.shape[1] < actual_max_len:
-                pad_width = actual_max_len - pr_truncated.shape[1]
-                padded_pr = np.pad(pr_truncated, ((0, 0), (0, pad_width)), mode='constant')
-                padded_pianorolls.append(padded_pr)
-            else:
-                padded_pianorolls.append(pr_truncated)
-        
-        # Stack the consistently-sized pianorolls for this song
-        pianoroll_stack = np.stack(padded_pianorolls)
+            if instrument.is_drum:
+                pianoroll = drum_to_pianoroll(instrument)
 
         # Convert to tensor and normalize velocities to <0, 1>
-        pianoroll_tensor = torch.tensor(pianoroll_stack, dtype=torch.float32)
+        pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32)
         pianoroll_tensor /= 127.0 # Use float division
 
         return pianoroll_tensor
-    
-    def extract_chords(self, file_path):
-        """
-        Extracts chord data from MIDI file
-        Args:
-            file_path (str): MIDI file path
-        Returns:
-            list of lists: A list of chord data where: [root_note (str), quality (str), full_chord_name (str), offset (float)]
-        """
-        midi_file = converter.parse(file_path)
-
-        chords = midi_file.chordify()
-
-        chord_progression = []
-
-        for c in chords.flat.getElementsByClass("Chord"):
-            if not c.isRest:
-                root_note = c.root().name
-                full_chord_name = c.pitchedCommonName
-                offset = c.offset  
-
-                chord_progression.append([root_note, full_chord_name, offset])
-        return chord_progression
-
-    def drum_to_pianoroll(self, instrument):
-        """
-        Create a pianoroll for a drum track manually because for instrument.is_drum 
-        the function: instrument.get_pianoroll() doesn't work.
-        """
-        end_time = max(note.end for note in instrument.notes)
-        n_frames = int(end_time * FS) + 1
-        pianoroll = np.zeros((NUM_PITCHES, n_frames)) 
-
-        for note in instrument.notes:
-            start = int(note.start * FS)
-            end = int(note.end * FS)
-            pitch = note.pitch
-            velocity = note.velocity
-            
-            # Fill values in the piano roll
-            pianoroll[pitch, start:end] = velocity
-
-        return pianoroll
-
     
     @staticmethod
     def collate_fn(batch):
