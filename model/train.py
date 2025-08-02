@@ -4,48 +4,62 @@ from dataset import setup_datasets_and_dataloaders
 from loss import compute_loss
 from train_utils import EarlyStopping, setup_commet_loger
 from config import *
+# from tqdm import tqdm
 
-def train(model, dataset_dir, experiment_name, verbose=True, model_save_path = "./saved_models/lofi-model.pth"):
+def train(model, dataset_dir, experiment_name, weights=None, verbose=True, model_save_path = "./saved_models/lofi-model.pth", weights_pth=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using {device} device")
     model.to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    if weights:
+        model.load_state_dict(torch.load(weights, map_location=device))
+        print("Loaded model weights from provided path.")
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+
+    # Load weights if available
+    if weights_pth:
+        print("\n---WEIGHTS LOADING---")
+        print(f"Loading weights from: {weights_pth}")
+        weights = torch.load(weights_pth)
+        model.load_state_dict(weights)
+        model.to(device)
+        print("Succesfully loaded weights.\n")
+        print('_' * 60, "\n")
+
 
     train_dataloader, val_dataloader = setup_datasets_and_dataloaders(dataset_dir)
     
     early_stopper = EarlyStopping(patience=5, path="checkpoints/best_model.pt")
     experiment = setup_commet_loger(experiment_name)
 
-    print("Starting training:")
-    print(f"The datset has {len(train_dataloader)} batches")
+    print("=================")
+    print("STARTING TRAINING")
+    print("=================")
+
+    print(f"Using {device} device\n")
+    print(f"The datset has {len(train_dataloader)} batches\n")
     for epoch in range(NUM_EPOCHS):
         # Training phase
         model.train()
-        train_loss = 0
-        train_loss_reconstruction = 0
-        train_loss_KL = 0
+        train_loss, train_loss_reconstruction, train_loss_KL = 0, 0, 0
 
         print(f'Epoch [{epoch + 1}/{NUM_EPOCHS}]')
-        print("Training:")
-        for batch_idx, (sequences, lengths, bpm) in enumerate(train_dataloader):
+        for batch_idx, (sequences, lengths, _) in enumerate(train_dataloader):
             sequences = sequences.to(device)
 
-            optimizer.zero_grad()
-
-            reconstructed_logits, mu, logvar = model(sequences, lengths)
+            reconstructed_batch, mean, logvar = model(sequences, lengths)
 
             # Compute loss
-            loss, loss_reconstruction, loss_KL = compute_loss(sequences, reconstructed_logits, mu, logvar, loss_type="MSE")
+            loss, loss_reconstruction, loss_KL = compute_loss(reconstructed_batch, sequences, mean, logvar, lengths.to(device))
+
+            # Backward pass and optimization
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
             train_loss += loss.item()
             train_loss_reconstruction += loss_reconstruction.item()
             train_loss_KL += loss_KL.item()
-
-            # Update network
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
 
             if verbose:
                 if batch_idx % 100 == 0:
@@ -61,7 +75,7 @@ def train(model, dataset_dir, experiment_name, verbose=True, model_save_path = "
                     experiment.log_metric("batch_train_loss", avg_train_loss, step=epoch * len(train_dataloader) + batch_idx)
                     experiment.log_metric("batch_train_loss_reconstruction", avg_train_loss_recon, step=epoch * len(train_dataloader) + batch_idx)
                     experiment.log_metric("batch_train_loss_KL", avg_train_loss_KL, step=epoch * len(train_dataloader) + batch_idx)
-
+                
 
         epoch_loss = train_loss / len(train_dataloader)
         epoch_reconstruction_loss = train_loss_reconstruction / len(train_dataloader)
@@ -73,18 +87,19 @@ def train(model, dataset_dir, experiment_name, verbose=True, model_save_path = "
 
         # Validation phase
         model.eval()
-        val_loss = 0
-        val_loss_reconstruction = 0
-        val_loss_KL = 0
+        val_loss, val_loss_reconstruction, val_loss_KL = 0, 0, 0
         print("Validating:")
         with torch.no_grad():
-            for batch_idx, (sequences, lengths, bpm) in enumerate(val_dataloader):
+            for batch_idx, (sequences, lengths, _) in enumerate(val_dataloader):
+                # if batch_idx > 1:
+                #     print("!!!Validating stopped after 100 batches for testing purposes!!!")
+                #     break
                 sequences = sequences.to(device)
 
-                reconstructed_logits, mu, logvar = model(sequences, lengths)
+                reconstructed_batch, mean, logvar = model(sequences, lengths)
 
                 # Compute loss
-                loss, loss_reconstruction, loss_KL = compute_loss(sequences, reconstructed_logits, mu, logvar, loss_type="MSE")
+                loss, loss_reconstruction, loss_KL = compute_loss(reconstructed_batch, sequences, mean, logvar, lengths.to(device))
 
                 val_loss += loss.item()
                 val_loss_reconstruction += loss_reconstruction.item()
@@ -110,17 +125,22 @@ def train(model, dataset_dir, experiment_name, verbose=True, model_save_path = "
         experiment.log_metric("epoch_val_loss_reconstruction", val_epoch_reconstruction_loss, step=epoch)
         experiment.log_metric("epoch_val_loss_KL", val_epoch_KL_loss, step=epoch)
 
+        # Save model progress
+        torch.save(model.state_dict(), f"./saved_models/lofi-model_epoch{epoch+1}.pth")
+
         # Early stopping and saving the trained model
         early_stopper(val_epoch_loss, model)
         if early_stopper.early_stop:
             print("Early stopping triggered.")
             break
 
-    print("Finished training!")
-    print(f"Saving the model to path: {model_save_path}")
-    torch.save(model.state_dict(), model_save_path)
+    print("===================")
+    print("TRAINING FINISHED")
+    print("===================")
+    print(f"Best model was saved to: {model_save_path}")
 
-    print("Model saved!")
+    # End the Comet experiment
+    experiment.end()
 
 
 
