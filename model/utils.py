@@ -15,6 +15,10 @@ def drum_to_pianoroll(instrument):
         end = int(note.end * FS)
         pitch = note.pitch
         velocity = note.velocity
+
+        #Binary threshold
+        if velocity > 0:
+            velocity = 1
         
         # Fill values in the piano roll
         pianoroll[pitch, start:end] = velocity

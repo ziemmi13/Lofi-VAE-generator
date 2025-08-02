@@ -54,8 +54,8 @@ class MidiDataset(Dataset):
                 pianoroll = drum_to_pianoroll(instrument)
 
         # Convert to tensor and normalize velocities to <0, 1>
-        pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32)
-        pianoroll_tensor /= 127.0 # Use float division
+        pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.int32)
+        # pianoroll_tensor /= 127.0 # Use float division
 
         return pianoroll_tensor
     
