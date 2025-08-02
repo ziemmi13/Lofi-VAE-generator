@@ -112,19 +112,3 @@ class LSTMVae(nn.Module):
         reconstruction = self.decoder(z, x.size(3)) # x.size(3) is max_len
         return reconstruction, mean, logvar
 
-def vae_loss_function(recon_x, x, mean, logvar, lengths):
-    # Create a mask to exclude padded parts from the loss calculation
-    max_len = x.size(3)
-    mask = torch.arange(max_len, device=x.device)[None, :] < lengths[:, None]
-    mask = mask.unsqueeze(1).unsqueeze(1).expand_as(x)
-
-    # 1. Reconstruction Loss (Binary Cross-Entropy)
-    # We only care about the loss for the actual sequence, not the padding
-    recon_loss = nn.functional.binary_cross_entropy(recon_x[mask], x[mask], reduction='sum')
-
-    # 2. KL Divergence
-    # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-    kl_div = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
-    
-    # The total loss is the sum, normalized by batch size
-    return (recon_loss + kl_div) / x.size(0)
