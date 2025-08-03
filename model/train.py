@@ -7,7 +7,7 @@ from config import *
 from dataset import MidiDataset
 # from tqdm import tqdm
 
-def train(model, dataset_dir, experiment_name, verbose=True, model_save_path = "./saved_models/lofi-model.pth", weights_pth=None, early_stopping=True):
+def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_path = "./saved_models/lofi-model.pth", weights_pth=None, early_stopping=True):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
@@ -38,8 +38,8 @@ def train(model, dataset_dir, experiment_name, verbose=True, model_save_path = "
     print(f"Using {device} device\n")
     print(f"The datset has {len(train_dataloader)} batches\n")
     for epoch in range(NUM_EPOCHS):
-        kld_anneal_epochs = 75  # The number of epochs to ramp up the weight
-        kld_max_weight = 0.002 
+        kld_anneal_epochs = 1  # The number of epochs to ramp up the weight
+        kld_max_weight = 0.5 
 
         if epoch < kld_anneal_epochs:
             # Linearly increase the weight from 0 to the max value
@@ -91,7 +91,7 @@ def train(model, dataset_dir, experiment_name, verbose=True, model_save_path = "
         epoch_reconstruction_loss = train_loss_reconstruction / len(train_dataloader)
         epoch_KL = train_loss_KL / len(train_dataloader)
         # Log epoch metrics
-        if experiment:
+        if experiment_name:
             experiment.log_metric("epoch_train_loss", epoch_loss, step=epoch)
             experiment.log_metric("epoch_train_loss_reconstruction", epoch_reconstruction_loss, step=epoch)
             experiment.log_metric("epoch_train_loss_KL", epoch_KL, step=epoch)
@@ -124,7 +124,7 @@ def train(model, dataset_dir, experiment_name, verbose=True, model_save_path = "
             print('_' * 60, "\n")
 
         # Log validation metrics
-        if experiment:
+        if experiment_name:
             experiment.log_metric("val_loss", val_epoch_loss, step=epoch)
             experiment.log_metric("epoch_val_loss_reconstruction", val_epoch_reconstruction_loss, step=epoch)
             experiment.log_metric("epoch_val_loss_KL", val_epoch_KL_loss, step=epoch)
@@ -156,7 +156,7 @@ def train(model, dataset_dir, experiment_name, verbose=True, model_save_path = "
     print(f"Best model was saved to: {model_save_path}")
 
     # End the Comet experiment
-    if experiment:
+    if experiment_name:
         experiment.end()
 
 

@@ -2,6 +2,7 @@ from config import *
 import numpy as np
 import numpy as np
 import pretty_midi
+from config import * # Import all your configuration variables
 
 
 def drum_to_pianoroll(instrument):
@@ -11,19 +12,22 @@ def drum_to_pianoroll(instrument):
     """
     end_time = max(note.end for note in instrument.notes)
     n_frames = int(end_time * FS) + 1
-    pianoroll = np.zeros((NUM_PITCHES, n_frames)) 
+    pianoroll = np.zeros((128, n_frames)) 
 
     for note in instrument.notes:
-        if not (MIN_MIDI_NOTE <= note.pitch <= MAX_MIDI_NOTE):
-            continue
+        # if not (MIN_MIDI_NOTE <= note.pitch <= MAX_MIDI_NOTE):
+        #     continue
         start = int(note.start * FS)
         end = int(note.end * FS)
 
-        pitch = note.pitch - MIN_MIDI_NOTE  
+        pitch = note.pitch  
         velocity = note.velocity
 
         # Fill values in the piano roll
         pianoroll[pitch, start:end] = velocity
+    
+    # Crop tensor to MIN_MIDI_NOTE and MAX_MIDI_NOTE
+    pianoroll = pianoroll[MIN_MIDI_NOTE:MAX_MIDI_NOTE + 1, :]
     
     # Flip the pianoroll so it looks like a piano roll
     # with the lowest pitch at the bottom

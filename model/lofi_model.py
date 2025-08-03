@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from config import *
 from dataset import MidiDataset
+from utils import pianoroll_tensor_to_midi
 
 class Encoder(nn.Module):
     def __init__(self, hidden_dim, z_dim, n_layers):
@@ -27,7 +28,7 @@ class Encoder(nn.Module):
 
     def forward(self, x, lengths):
         # x shape: (batch_size, num_pitches, max_len)
-        
+
         # Reshape and permute for LSTM input
         # We want (batch_size, seq_len, features)
         x = x.permute(0, 2, 1) 
@@ -137,7 +138,7 @@ class LofiModel(nn.Module):
         reconstructed_x = reconstructed_x.cpu()
         MidiDataset.visualize_midi(reconstructed_x)
     
-    def generate(self, max_len=MAX_SEQ_LEN, visualize=True, threshold=0.01):
+    def generate(self, max_len=MAX_SEQ_LEN, visualize=True, threshold=0.01, save_path=None):
         self.eval()
         with torch.no_grad():
             z = torch.randn(1, LATENT_DIM).to(self.device)
@@ -183,6 +184,9 @@ class LofiModel(nn.Module):
             generated_sequence[generated_sequence < threshold] = 0  # Apply threshold 
             if visualize:
                 MidiDataset.visualize_midi(generated_sequence)
+            
+            if save_path:
+                pianoroll_tensor_to_midi(generated_sequence, save_path)
 
             return generated_sequence
 

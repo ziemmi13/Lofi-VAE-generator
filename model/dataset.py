@@ -5,14 +5,15 @@ from config import *
 from torch.utils.data import random_split
 import os
 import pandas as pd
-from utils import drum_to_pianoroll
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence 
 import matplotlib.pyplot as plt
+from utils import drum_to_pianoroll
+import numpy as np
 
 
 class MidiDataset(Dataset):
-    def __init__(self, dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\PROJEKT ZESPOLOWY\dataset\maestro-piano-dataset", verbose=False):
+    def __init__(self, dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\PROJEKT ZESPOLOWY\dataset\golden_dataset\all_songs", verbose=False):
         self.dataset_dir = dataset_dir
         all_midi_files = [f for f in os.listdir(dataset_dir)]
         self.df = pd.DataFrame(all_midi_files, columns=['file_name'])
@@ -54,13 +55,12 @@ class MidiDataset(Dataset):
        
         # Convert midi file to pianoroll
         instrument = midi_file.instruments[0] 
-        pianoroll = instrument.get_piano_roll(fs=FS)
+        pianoroll = drum_to_pianoroll(instrument)
+
+        pianoroll_copy = pianoroll.copy()
        
         # Convert to tensor 
-        pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32)
-
-        # Crop tensor to MIN_MIDI_NOTE and MAX_MIDI_NOTE
-        pianoroll_tensor = pianoroll_tensor[MIN_MIDI_NOTE:MAX_MIDI_NOTE + 1, :]
+        pianoroll_tensor = torch.tensor(pianoroll_copy, dtype=torch.float32)
 
         pianoroll_len = pianoroll_tensor.shape[1]
         if pianoroll_len > MAX_SEQ_LEN:
@@ -92,14 +92,14 @@ class MidiDataset(Dataset):
         )
     
     @ staticmethod
-    def visualize_midi(piano_roll):
+    def visualize_midi(pianoroll):
         """
         Visualizes the MIDI piano roll.
         Args:
             piano_roll (torch.Tensor): Tensor representation of the pianoroll (NUM_PITCHES, time).
         """
         plt.figure(figsize=(12, 4))
-        plt.imshow(piano_roll.numpy(), aspect='auto', origin='lower', cmap='hot')
+        plt.imshow(pianoroll.flip(0).numpy(), aspect='auto', origin='lower', cmap='hot')
         plt.xlabel('Time Steps')
         plt.ylabel('MIDI Notes')
         plt.title('Piano Roll Visualization')
