@@ -87,6 +87,7 @@ class LofiModel(nn.Module):
         self.encoder = Encoder(hidden_dim, latent_dim, n_layers)
         self.decoder = Decoder(latent_dim, hidden_dim, n_layers)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.to(self.device)
 
         self.fc_latent_to_hidden = nn.Linear(latent_dim, n_layers * hidden_dim)
         self.fc_latent_to_cell = nn.Linear(latent_dim, n_layers * hidden_dim)
@@ -123,13 +124,6 @@ class LofiModel(nn.Module):
         # Apply final activation function here
         return reconstruction, mean, logvar
     
-    def generate(self, max_len):
-        # Generate a random latent vector
-        z = torch.randn(1, LATENT_DIM).to(next(self.parameters()).device)
-        # Decode the latent vector to generate a sequence
-        generated_sequence = self.decoder(z, max_len)
-        return generated_sequence
-    
     def reconstruct(self, x, lengths):
         self.eval()
 
@@ -140,8 +134,55 @@ class LofiModel(nn.Module):
             reconstructed_x, _, _ = self(x, lengths_tensor)
         
         reconstructed_x = reconstructed_x.squeeze(0)  # Remove batch dimension
-        # Threshold small values to zero
-        # reconstructed_x[reconstructed_x < 0.05] = 0.0
         reconstructed_x = reconstructed_x.cpu()
         MidiDataset.visualize_midi(reconstructed_x)
+    
+    def generate(self, max_len=MAX_SEQ_LEN, visualize=True, threshold=0.01):
+        self.eval()
+        with torch.no_grad():
+            z = torch.randn(1, LATENT_DIM).to(self.device)
+
+            # 2. Map z to the initial hidden and cell states for the decoder's LSTM
+            hidden_init_flat = self.fc_latent_to_hidden(z)
+            cell_init_flat = self.fc_latent_to_cell(z)
+            
+            # Reshape to (n_layers, batch_size=1, hidden_dim)
+            hidden = hidden_init_flat.view(self.n_layers, 1, self.hidden_dim)
+            cell = cell_init_flat.view(self.n_layers, 1, self.hidden_dim)
+
+            # 3. Create a "start of sequence" token. This will be a tensor of zeros.
+            # Shape: (batch_size=1, seq_len=1, features=NUM_PITCHES)
+            decoder_input = torch.zeros(1, 1, NUM_PITCHES).to(self.device)
+
+            generated_sequence = []
+            # 4. Autoregressive loop
+            for _ in range(max_len):
+                # Pass the input and the current states to the LSTM
+                lstm_out, (hidden, cell) = self.decoder.lstm(decoder_input, (hidden, cell))
+                
+                # Get the output logits for this time step
+                output = self.decoder.fc(lstm_out)
+                
+                # The output of this step becomes the input for the next step
+                decoder_input = output
+                
+                # Store the result (removing the sequence length dimension)
+                generated_sequence.append(output.squeeze(1))
+
+            # Stack all the generated time steps into a single tensor
+            generated_sequence = torch.stack(generated_sequence, dim=1)
+            # Permute to match the target shape: (batch, pitches, time)
+            generated_sequence = generated_sequence.permute(0, 2, 1)
+
+            # Prepare for visualization
+            generated_sequence = generated_sequence.squeeze(0)  # Remove batch dimension
+            generated_sequence = generated_sequence.cpu()
+
+            # Preprocess
+            generated_sequence = torch.clamp(generated_sequence, 0, 1)  # Ensure values are in [0, 1] range
+            generated_sequence[generated_sequence < threshold] = 0  # Apply threshold 
+            if visualize:
+                MidiDataset.visualize_midi(generated_sequence)
+
+            return generated_sequence
 
