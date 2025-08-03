@@ -4,17 +4,14 @@ from dataset import setup_datasets_and_dataloaders
 from loss import compute_loss
 from train_utils import EarlyStopping, setup_commet_loger
 from config import *
+from dataset import MidiDataset
 # from tqdm import tqdm
 
-def train(model, dataset_dir, experiment_name, weights=None, verbose=True, model_save_path = "./saved_models/lofi-model.pth", weights_pth=None):
+def train(model, dataset_dir, experiment_name, verbose=True, model_save_path = "./saved_models/lofi-model.pth", weights_pth=None, early_stopping=True):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
-    if weights:
-        model.load_state_dict(torch.load(weights, map_location=device))
-        print("Loaded model weights from provided path.")
-
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
     # Load weights if available
     if weights_pth:
@@ -29,8 +26,10 @@ def train(model, dataset_dir, experiment_name, weights=None, verbose=True, model
 
     train_dataloader, val_dataloader = setup_datasets_and_dataloaders(dataset_dir)
     
-    early_stopper = EarlyStopping(patience=5, path="checkpoints/best_model.pt")
-    experiment = setup_commet_loger(experiment_name)
+    if early_stopping:
+        early_stopper = EarlyStopping(patience=5, path="checkpoints/best_model.pt")
+    if experiment_name:
+        experiment = setup_commet_loger(experiment_name)
 
     print("=================")
     print("STARTING TRAINING")
@@ -39,22 +38,32 @@ def train(model, dataset_dir, experiment_name, weights=None, verbose=True, model
     print(f"Using {device} device\n")
     print(f"The datset has {len(train_dataloader)} batches\n")
     for epoch in range(NUM_EPOCHS):
+        kld_anneal_epochs = 75  # The number of epochs to ramp up the weight
+        kld_max_weight = 0.002 
+
+        if epoch < kld_anneal_epochs:
+            # Linearly increase the weight from 0 to the max value
+            kld_weight = kld_max_weight * (epoch / kld_anneal_epochs)
+        else:
+            kld_weight = kld_max_weight
+
         # Training phase
         model.train()
         train_loss, train_loss_reconstruction, train_loss_KL = 0, 0, 0
 
         print(f'Epoch [{epoch + 1}/{NUM_EPOCHS}]')
-        for batch_idx, (sequences, lengths, _) in enumerate(train_dataloader):
+        for batch_idx, (sequences, lengths) in enumerate(train_dataloader):
             sequences = sequences.to(device)
 
             reconstructed_batch, mean, logvar = model(sequences, lengths)
 
             # Compute loss
-            loss, loss_reconstruction, loss_KL = compute_loss(reconstructed_batch, sequences, mean, logvar, lengths.to(device))
+            loss, loss_reconstruction, loss_KL = compute_loss(reconstructed_batch, sequences, mean, logvar, kld_weight=kld_weight)
 
             # Backward pass and optimization
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             train_loss += loss.item()
@@ -62,7 +71,7 @@ def train(model, dataset_dir, experiment_name, weights=None, verbose=True, model
             train_loss_KL += loss_KL.item()
 
             if verbose:
-                if batch_idx % 100 == 0:
+                if batch_idx % 10 == 0:
                     avg_train_loss = train_loss / (batch_idx + 1)
                     avg_train_loss_recon = train_loss_reconstruction / (batch_idx + 1)
                     avg_train_loss_KL = train_loss_KL / (batch_idx + 1)
@@ -72,43 +81,37 @@ def train(model, dataset_dir, experiment_name, weights=None, verbose=True, model
                     print(f'\tCurrent training Reconstruction Loss: {avg_train_loss_recon:.4f}')
                     print(f'\tCurrent training KL Loss: {avg_train_loss_KL:.4f}')
 
-                    experiment.log_metric("batch_train_loss", avg_train_loss, step=epoch * len(train_dataloader) + batch_idx)
-                    experiment.log_metric("batch_train_loss_reconstruction", avg_train_loss_recon, step=epoch * len(train_dataloader) + batch_idx)
-                    experiment.log_metric("batch_train_loss_KL", avg_train_loss_KL, step=epoch * len(train_dataloader) + batch_idx)
-                
+                    if experiment_name:
+                        experiment.log_metric("batch_train_loss", avg_train_loss, step=epoch * len(train_dataloader) + batch_idx)
+                        experiment.log_metric("batch_train_loss_reconstruction", avg_train_loss_recon, step=epoch * len(train_dataloader) + batch_idx)
+                        experiment.log_metric("batch_train_loss_KL", avg_train_loss_KL, step=epoch * len(train_dataloader) + batch_idx)
+                    
 
         epoch_loss = train_loss / len(train_dataloader)
         epoch_reconstruction_loss = train_loss_reconstruction / len(train_dataloader)
         epoch_KL = train_loss_KL / len(train_dataloader)
         # Log epoch metrics
-        experiment.log_metric("epoch_train_loss", epoch_loss, step=epoch)
-        experiment.log_metric("epoch_train_loss_reconstruction", epoch_reconstruction_loss, step=epoch)
-        experiment.log_metric("epoch_train_loss_KL", epoch_KL, step=epoch)
+        if experiment:
+            experiment.log_metric("epoch_train_loss", epoch_loss, step=epoch)
+            experiment.log_metric("epoch_train_loss_reconstruction", epoch_reconstruction_loss, step=epoch)
+            experiment.log_metric("epoch_train_loss_KL", epoch_KL, step=epoch)
 
         # Validation phase
         model.eval()
         val_loss, val_loss_reconstruction, val_loss_KL = 0, 0, 0
         print("Validating:")
         with torch.no_grad():
-            for batch_idx, (sequences, lengths, _) in enumerate(val_dataloader):
-                # if batch_idx > 1:
-                #     print("!!!Validating stopped after 100 batches for testing purposes!!!")
-                #     break
+            for batch_idx, (sequences, lengths) in enumerate(val_dataloader):
                 sequences = sequences.to(device)
 
                 reconstructed_batch, mean, logvar = model(sequences, lengths)
 
                 # Compute loss
-                loss, loss_reconstruction, loss_KL = compute_loss(reconstructed_batch, sequences, mean, logvar, lengths.to(device))
+                loss, loss_reconstruction, loss_KL = compute_loss(reconstructed_batch, sequences, mean, logvar, kld_weight=kld_weight)
 
                 val_loss += loss.item()
                 val_loss_reconstruction += loss_reconstruction.item()
                 val_loss_KL += loss_KL.item()
-
-                # if verbose:
-                #     if batch_idx % 100 == 0:
-                #         print(f'\tBatch index: {batch_idx+1}/{len(val_dataloader)}')
-                #         print(f'\tCurrent validation Loss: {val_loss:.4f}')
 
         val_epoch_loss = val_loss / len(val_dataloader) 
         val_epoch_reconstruction_loss = val_loss_reconstruction / len(val_dataloader)
@@ -121,26 +124,40 @@ def train(model, dataset_dir, experiment_name, weights=None, verbose=True, model
             print('_' * 60, "\n")
 
         # Log validation metrics
-        experiment.log_metric("val_loss", val_epoch_loss, step=epoch)
-        experiment.log_metric("epoch_val_loss_reconstruction", val_epoch_reconstruction_loss, step=epoch)
-        experiment.log_metric("epoch_val_loss_KL", val_epoch_KL_loss, step=epoch)
+        if experiment:
+            experiment.log_metric("val_loss", val_epoch_loss, step=epoch)
+            experiment.log_metric("epoch_val_loss_reconstruction", val_epoch_reconstruction_loss, step=epoch)
+            experiment.log_metric("epoch_val_loss_KL", val_epoch_KL_loss, step=epoch)
 
         # Save model progress
-        torch.save(model.state_dict(), f"./saved_models/lofi-model_epoch{epoch+1}.pth")
+        torch.save(model.state_dict(), f"./saved_models/progress/lofi-model_epoch{epoch+1}.pth")
+
+        # Visualize some random samples reconstructed by the model
+        if verbose:
+            random_num = torch.randint(0, len(train_dataloader.dataset), (1,)).item()
+            random_tensor, random_length = train_dataloader.dataset[random_num]
+            print(f"\nVisualizing random sample {random_num} from the training dataset:")
+            MidiDataset.visualize_midi(random_tensor)
+            print("Reconstructed sample:")
+            model.reconstruct(random_tensor, random_length)
+            print('_' * 60, "\n")
 
         # Early stopping and saving the trained model
-        early_stopper(val_epoch_loss, model)
-        if early_stopper.early_stop:
-            print("Early stopping triggered.")
-            break
+        if early_stopping:
+            early_stopper(val_epoch_loss, model)
+            if early_stopper.early_stop:
+                print("Early stopping triggered.")
+                break
 
-    print("===================")
+    torch.save(model.state_dict(), model_save_path)
+
     print("TRAINING FINISHED")
     print("===================")
     print(f"Best model was saved to: {model_save_path}")
 
     # End the Comet experiment
-    experiment.end()
+    if experiment:
+        experiment.end()
 
 
 

@@ -1,25 +1,26 @@
+import pretty_midi
+
 # Training variables
-TRAIN_VALIDATION_SPLIT = 0.9
-BATCH_SIZE = 32
-LEARNING_RATE = 3e-5
-WEIGHT_DECAY = 1e-2
-NUM_EPOCHS = 5
+TRAIN_VALIDATION_SPLIT = 0.8
+BATCH_SIZE = 16
+LEARNING_RATE = 1e-4
+WEIGHT_DECAY = 1e-4
+NUM_EPOCHS = 200
 LATENT_DIM = 128
+HIDDEN_DIM = 256
 LSTM_LAYERS = 2
 
-FS=32
+FS= 8
 
 # DATASET
-MIN_MIDI_NOTE = 0  # A0 (MIDI note number). This is the lowest MIDI note we will consider.
-MAX_MIDI_NOTE = 128 # C8 (MIDI note number). This is the highest MIDI note we will consider.
+MIN_MIDI_NOTE = pretty_midi.note_name_to_number('C2') # C2 (MIDI note number). This is the lowest MIDI note we will consider.
+MAX_MIDI_NOTE = pretty_midi.note_name_to_number('C7') 
 # The number of unique notes in our piano roll representation.
 # For 88 keys: 108 - 21 + 1 = 88. This is our feature dimension for each time step.
  
-# NUM_PITCHES = MAX_MIDI_NOTE - MIN_MIDI_NOTE + 1
-NUM_PITCHES = 128
-NUM_INSTRUMENTS = 1 # PNLY DRUMMS
-INPUT_DIM = NUM_INSTRUMENTS * NUM_PITCHES
+NUM_PITCHES = MAX_MIDI_NOTE - MIN_MIDI_NOTE + 1
+# NUM_PITCHES = 128
+INPUT_DIM = NUM_PITCHES
 
-MAX_SEQ_LEN = 1920 # ONE MINUTE
-
+MAX_SEQ_LEN = 300 # 1 min
 

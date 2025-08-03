@@ -1,21 +1,20 @@
+# in loss.py
 import torch
 import torch.nn.functional as F
-import torch.nn as nn
 
-def compute_loss(x, recon_x, mean, logvar, lengths):
-    # Create a mask to exclude padded parts from the loss calculation
-    max_len = x.size(3)
-    mask = torch.arange(max_len, device=x.device)[None, :] < lengths[:, None]
-    mask = mask.unsqueeze(1).unsqueeze(1).expand_as(x)
+def compute_loss(recon_x, x, mean, logvar, kld_weight=1.0):
+    # --- CHANGE THIS LINE ---
+    # recon_loss = F.binary_cross_entropy(recon_x, x, reduction='sum')
+    recon_loss = F.mse_loss(recon_x, x, reduction='sum')
 
-    # 1. Reconstruction Loss (Binary Cross-Entropy)
-    # We only care about the loss for the actual sequence, not the padding
-    recon_loss = nn.functional.binary_cross_entropy(recon_x[mask], x[mask], reduction='sum')
-
-    # 2. KL Divergence
-    # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
+    # KL Divergence remains the same
     kl_div = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
     
-    # The total loss is the sum, normalized by batch size
-    total_loss = (recon_loss + kl_div) / x.size(0)
-    return total_loss, recon_loss, kl_div   
+    # The rest of the logic can stay the same
+    total_loss = recon_loss + (kld_weight * kl_div)
+    
+    total_loss /= x.size(0)
+    recon_loss /= x.size(0)
+    kl_div /= x.size(0)
+    
+    return total_loss, recon_loss, kl_div

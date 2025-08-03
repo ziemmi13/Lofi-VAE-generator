@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 from config import *
+from dataset import MidiDataset
 
 class Encoder(nn.Module):
     def __init__(self, hidden_dim, z_dim, n_layers):
@@ -11,9 +12,9 @@ class Encoder(nn.Module):
         self.n_layers = n_layers
 
         # The input to the LSTM will be a flattened sequence of pitches for each time step.
-        # Input features will be NUM_PITCHES * NUM_INSTRUMENTS
+        # Input features will be NUM_PITCHES
         self.lstm = nn.LSTM(
-            NUM_PITCHES * NUM_INSTRUMENTS,
+            NUM_PITCHES,
             hidden_dim,
             n_layers,
             batch_first=True,
@@ -25,14 +26,12 @@ class Encoder(nn.Module):
         self.fc_logvar = nn.Linear(2 * hidden_dim, z_dim)
 
     def forward(self, x, lengths):
-        # x shape: (batch_size, num_instruments, num_pitches, max_len)
+        # x shape: (batch_size, num_pitches, max_len)
         
         # Reshape and permute for LSTM input
         # We want (batch_size, seq_len, features)
-        x = x.permute(0, 3, 1, 2) 
-        # New shape: (batch_size, max_len, num_instruments, num_pitches)
-        x = x.reshape(x.size(0), x.size(1), -1) 
-        # New shape: (batch_size, max_len, num_instruments * num_pitches)
+        x = x.permute(0, 2, 1) 
+        # New shape: (batch_size, max_len, num_pitches)
 
         # Pack padded sequence to handle variable lengths
         packed_x = nn.utils.rnn.pack_padded_sequence(x, lengths.cpu(), batch_first=True, enforce_sorted=True)
@@ -60,43 +59,39 @@ class Decoder(nn.Module):
 
         # LSTM for decoding
         self.lstm = nn.LSTM(
-            z_dim,
+            NUM_PITCHES,
             hidden_dim,
             n_layers,
             batch_first=True
         )
         
         # Fully connected layer to reconstruct the piano roll
-        self.fc = nn.Linear(hidden_dim, NUM_PITCHES * NUM_INSTRUMENTS)
+        self.fc = nn.Linear(hidden_dim, NUM_PITCHES)
 
-    def forward(self, z, max_len):
-        # z shape: (batch_size, z_dim)
+    def forward(self, x, hidden, cell):
+        # x is now the input sequence for teacher forcing
+        # hidden and cell are the initial states derived from z
+        # x shape: (batch_size, max_len, num_pitches)
         
-        # Repeat z for each time step up to max_len
-        # This provides the latent vector as input at each decoding step
-        z_repeated = z.unsqueeze(1).repeat(1, max_len, 1)
-        
-        # LSTM forward pass
-        lstm_out, _ = self.lstm(z_repeated)
-        
-        # Fully connected layer to get output features
-        # lstm_out shape: (batch_size, max_len, hidden_dim)
+        lstm_out, _ = self.lstm(x, (hidden, cell))
         output = self.fc(lstm_out)
         
-        # Reshape to piano roll format and apply sigmoid
-        # Sigmoid is used because input pixels (velocities) are normalized between 0 and 1
-        output = torch.sigmoid(output)
-        output = output.view(output.size(0), output.size(1), NUM_INSTRUMENTS, NUM_PITCHES)
-        # Permute to match input shape: (batch_size, num_instruments, num_pitches, max_len)
-        output = output.permute(0, 2, 3, 1)
-        
+        # We will apply sigmoid in the main model class
+        # Permute to match target shape
+        output = output.permute(0, 2, 1)
         return output
 
-class LSTMVae(nn.Module):
-    def __init__(self, hidden_dim=LATENT_DIM, z_dim=LATENT_DIM, n_layers=LSTM_LAYERS):
-        super(LSTMVae, self).__init__()
-        self.encoder = Encoder(hidden_dim, z_dim, n_layers)
-        self.decoder = Decoder(z_dim, hidden_dim, n_layers)
+class LofiModel(nn.Module):
+    def __init__(self, hidden_dim=HIDDEN_DIM, latent_dim=LATENT_DIM, n_layers=LSTM_LAYERS):
+        super(LofiModel, self).__init__()
+        self.encoder = Encoder(hidden_dim, latent_dim, n_layers)
+        self.decoder = Decoder(latent_dim, hidden_dim, n_layers)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.fc_latent_to_hidden = nn.Linear(latent_dim, n_layers * hidden_dim)
+        self.fc_latent_to_cell = nn.Linear(latent_dim, n_layers * hidden_dim)
+        self.n_layers = n_layers
+        self.hidden_dim = hidden_dim
 
     def reparameterize(self, mean, logvar):
         # Standard deviation
@@ -109,6 +104,44 @@ class LSTMVae(nn.Module):
     def forward(self, x, lengths):
         mean, logvar = self.encoder(x, lengths)
         z = self.reparameterize(mean, logvar)
-        reconstruction = self.decoder(z, x.size(3)) # x.size(3) is max_len
+
+        # --- MAP Z TO DECODER'S INITIAL STATE ---
+        hidden_init_flat = self.fc_latent_to_hidden(z)
+        cell_init_flat = self.fc_latent_to_cell(z)
+
+        batch_size = x.size(0)
+        # Reshape to (n_layers, batch_size, hidden_dim)
+        decoder_hidden_init = hidden_init_flat.view(self.n_layers, batch_size, self.hidden_dim)
+        decoder_cell_init = cell_init_flat.view(self.n_layers, batch_size, self.hidden_dim)
+
+        # --- DECODE with TEACHER FORCING ---
+        # The decoder's input should be the original sequence permuted for LSTM
+        decoder_input = x.permute(0, 2, 1) # Shape: (batch_size, max_len, num_pitches)
+        
+        reconstruction = self.decoder(decoder_input, decoder_hidden_init, decoder_cell_init)
+        
+        # Apply final activation function here
         return reconstruction, mean, logvar
+    
+    def generate(self, max_len):
+        # Generate a random latent vector
+        z = torch.randn(1, LATENT_DIM).to(next(self.parameters()).device)
+        # Decode the latent vector to generate a sequence
+        generated_sequence = self.decoder(z, max_len)
+        return generated_sequence
+    
+    def reconstruct(self, x, lengths):
+        self.eval()
+
+        lengths_tensor = torch.tensor([lengths], dtype=torch.long)
+        x = x.unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            reconstructed_x, _, _ = self(x, lengths_tensor)
+        
+        reconstructed_x = reconstructed_x.squeeze(0)  # Remove batch dimension
+        # Threshold small values to zero
+        # reconstructed_x[reconstructed_x < 0.05] = 0.0
+        reconstructed_x = reconstructed_x.cpu()
+        MidiDataset.visualize_midi(reconstructed_x)
 

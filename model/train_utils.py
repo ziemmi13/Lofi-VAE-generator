@@ -4,7 +4,7 @@ from comet_ml import Experiment
 import os
 
 class EarlyStopping:
-    def __init__(self, patience=5, delta=0.0, path='checkpoints/checkpoint.pt', verbose=False):
+    def __init__(self, patience=15, delta=0.0, path='checkpoints/checkpoint.pt', verbose=False):
         self.patience = patience
         self.delta = delta
         self.path = path

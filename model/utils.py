@@ -1,5 +1,8 @@
 from config import *
 import numpy as np
+import numpy as np
+import pretty_midi
+
 
 def drum_to_pianoroll(instrument):
     """
@@ -11,16 +14,93 @@ def drum_to_pianoroll(instrument):
     pianoroll = np.zeros((NUM_PITCHES, n_frames)) 
 
     for note in instrument.notes:
+        if not (MIN_MIDI_NOTE <= note.pitch <= MAX_MIDI_NOTE):
+            continue
         start = int(note.start * FS)
         end = int(note.end * FS)
-        pitch = note.pitch
+
+        pitch = note.pitch - MIN_MIDI_NOTE  
         velocity = note.velocity
 
-        #Binary threshold
-        if velocity > 0:
-            velocity = 1
-        
         # Fill values in the piano roll
         pianoroll[pitch, start:end] = velocity
+    
+    # Flip the pianoroll so it looks like a piano roll
+    # with the lowest pitch at the bottom
+    flipped_pianoroll = np.flip(pianoroll, axis=0)
 
-    return pianoroll
+    return flipped_pianoroll
+
+
+def pianoroll_to_instrument(piano_roll, fs, program=0):
+    """
+    Converts a piano roll numpy array into a PrettyMIDI Instrument object.
+    (This version is robust against silent piano rolls).
+    """
+    instrument = pretty_midi.Instrument(program=program, is_drum=True, name="Generated Drums")
+    
+    notes, frames = piano_roll.shape
+    piano_roll = np.pad(piano_roll, [(0, 0), (0, 1)], 'constant')
+    velocity_threshold = 10 
+
+    for pitch in range(notes):
+        # Find the frames where this pitch is active
+        frames_where_pitch_is_on = np.where(piano_roll[pitch] > velocity_threshold)[0]
+        
+        if len(frames_where_pitch_is_on) == 0:
+            continue
+        
+        frame_diffs = np.diff(frames_where_pitch_is_on)
+        
+        # Find the start of each note event
+        start_frames = np.where(frame_diffs > 1)[0]
+        start_frames = np.append(0, start_frames + 1)
+        start_frames = frames_where_pitch_is_on[start_frames]
+        
+        # Find the end of each note event
+        end_frames = np.where(frame_diffs > 1)[0]
+        end_frames = frames_where_pitch_is_on[end_frames]
+        end_frames = np.append(end_frames, frames_where_pitch_is_on[-1])
+
+        for i in range(len(start_frames)):
+            start_time = start_frames[i] / fs
+            end_time = (end_frames[i] + 1) / fs
+            
+            velocity = int(piano_roll[pitch, start_frames[i]])
+
+            note = pretty_midi.Note(
+                velocity=velocity,
+                pitch=pitch,
+                start=start_time,
+                end=end_time
+            )
+            instrument.notes.append(note)
+
+    return instrument
+
+
+def pianoroll_tensor_to_midi(pianoroll_tensor, output_path):
+    """
+    Converts a piano roll tensor back into a MIDI file.
+    (This function now uses our new helper).
+    """
+    if pianoroll_tensor.is_cuda:
+        pianoroll_tensor = pianoroll_tensor.cpu()
+        
+    if pianoroll_tensor.dim() == 4:
+        pianoroll_tensor = pianoroll_tensor.squeeze(0)
+    
+    pianoroll_tensor = pianoroll_tensor.squeeze(0)
+
+    pianoroll_velocities = pianoroll_tensor * 127.0
+    pianoroll_np = pianoroll_velocities.numpy().astype(np.int16)
+
+    midi_data = pretty_midi.PrettyMIDI(initial_tempo=120)
+    
+    drum_instrument = pianoroll_to_instrument(pianoroll_np, fs=FS, program=0)
+    
+    midi_data.instruments.append(drum_instrument)
+    midi_data.write(output_path)
+    print(f"Successfully saved MIDI file to {output_path}")
+
+

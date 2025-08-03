@@ -6,13 +6,17 @@ from torch.utils.data import random_split
 import os
 import pandas as pd
 from utils import drum_to_pianoroll
+import torch.nn.functional as F
+from torch.nn.utils.rnn import pad_sequence 
+import matplotlib.pyplot as plt
+
 
 class MidiDataset(Dataset):
-    def __init__(self, dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\PROJEKT ZESPOLOWY\dataset\golden_dataset", verbose=False):
-        self.songs_dir = os.path.join(dataset_dir, "all_songs")
-        self.df = pd.read_csv(os.path.join(dataset_dir, "midi_metadata.csv"))
+    def __init__(self, dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\PROJEKT ZESPOLOWY\dataset\maestro-piano-dataset", verbose=False):
+        self.dataset_dir = dataset_dir
+        all_midi_files = [f for f in os.listdir(dataset_dir)]
+        self.df = pd.DataFrame(all_midi_files, columns=['file_name'])
         self.verbose = verbose
-        self.count = 0
         
     def __len__(self):
         return len(self.df)
@@ -20,15 +24,15 @@ class MidiDataset(Dataset):
     def __getitem__(self, index):
         # Load data from csv
         file_name = self.df.iloc[index, 0]
-        file_path = os.path.join(self.songs_dir, file_name)
-        bpm = int(round(self.df.iloc[index, 3]))
+        file_path = os.path.join(self.dataset_dir, file_name)
 
-        drumms_tensor = self._prepare_pianoroll_tensor(file_path)
-        seq_len = drumms_tensor.shape[1]
+        piano_tensor = self._prepare_pianoroll_tensor(file_path)
+        seq_len = piano_tensor.shape[1]
         if self.verbose:
             clean_file_name = os.path.splitext(file_name)[0]    
-            return drumms_tensor, seq_len, bpm, clean_file_name
-        return drumms_tensor, seq_len, bpm
+            return piano_tensor, seq_len, clean_file_name
+        
+        return piano_tensor, seq_len
 
     def _prepare_pianoroll_tensor(self, file_path):
         """
@@ -47,58 +51,61 @@ class MidiDataset(Dataset):
         except Exception as e:
             print(f"Error loading MIDI file {file_path}: {e}")
             return torch.zeros((NUM_PITCHES, MAX_SEQ_LEN), dtype=torch.float32)
-        
-        # Convert to pianoroll for each instrument
-        for instrument in midi_file.instruments:
-            if instrument.is_drum:
-                pianoroll = drum_to_pianoroll(instrument)
+       
+        # Convert midi file to pianoroll
+        instrument = midi_file.instruments[0] 
+        pianoroll = instrument.get_piano_roll(fs=FS)
+       
+        # Convert to tensor 
+        pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.float32)
 
-        # Convert to tensor and normalize velocities to <0, 1>
-        pianoroll_tensor = torch.tensor(pianoroll, dtype=torch.int32)
-        # pianoroll_tensor /= 127.0 # Use float division
+        # Crop tensor to MIN_MIDI_NOTE and MAX_MIDI_NOTE
+        pianoroll_tensor = pianoroll_tensor[MIN_MIDI_NOTE:MAX_MIDI_NOTE + 1, :]
+
+        pianoroll_len = pianoroll_tensor.shape[1]
+        if pianoroll_len > MAX_SEQ_LEN:
+            pianoroll_tensor = pianoroll_tensor[:, :MAX_SEQ_LEN]
+
+        if pianoroll_len< MAX_SEQ_LEN:
+            padding_needed = MAX_SEQ_LEN - pianoroll_len
+            # The pad format is (pad_left, pad_right, pad_top, pad_bottom)
+            # We only want to pad on the right of the time dimension (dim 1)
+            pianoroll_tensor = F.pad(pianoroll_tensor, (0, padding_needed))
+
+        # Normalize velocities to <0, 1>
+        pianoroll_tensor /= 127.0 # Use float division
 
         return pianoroll_tensor
     
+
     @staticmethod
     def collate_fn(batch):
-        """
-         It pads all sequences in a batch to the length of the longest sequence.
-        Args:
-            batch (list): A list of tuples, where each tuple is 
-                          (pianoroll_tensor, seq_len, bpm).
-                          pianoroll_tensor shape: (num_instruments, num_pitches, time)
-        Returns:
-            tuple: A tuple containing:
-                - padded_sequences (torch.Tensor): Padded tensors of shape 
-                  (batch_size, num_instruments, num_pitches, max_len).
-                - lengths (torch.Tensor): Original sequence lengths of shape (batch_size,).
-                - bpms (torch.Tensor): BPM values for each item in the batch (batch_size,).
-        """
-        # Sort the batch by sequence length in descending order.
-        # This is a common optimization for `pack_padded_sequence` in LSTMs.
-        # `x[1]` refers to the original length stored in the tuple `(tensor, length)`.
         batch.sort(key=lambda x: x[1], reverse=True)
+        tensors, lengths= zip(*batch)
 
-        # Extract tensors, lenghts, bpms
-        tensors, lengths, bpms = zip(*batch)
-
-        # Create a batch of tensors of zeros for padding. All tensors will be padded to `max_len`.
-        batch_size = len(tensors)
-        padded_batch = torch.zeros(batch_size, NUM_INSTRUMENTS, NUM_PITCHES, MAX_SEQ_LEN, dtype=torch.float32)
-        
-        # Fill the padded tensor with the actual sequence data.
-        for i, tensor in enumerate(tensors):
-            # Get the original length of the current sequence
-            end = lengths[i]
-            # Use slicing to copy the 3D tensor into its place in the 4D batch tensor
-            padded_batch[i, :, :, :end] = tensor
+        # torch.stack is a more direct way to create the batch from a list of tensors
+        padded_batch = torch.stack(tensors, dim=0)
 
         return (
             padded_batch, 
             torch.tensor(lengths, dtype=torch.long), 
-            torch.tensor(bpms, dtype=torch.long)
         )
-
+    
+    @ staticmethod
+    def visualize_midi(piano_roll):
+        """
+        Visualizes the MIDI piano roll.
+        Args:
+            piano_roll (torch.Tensor): Tensor representation of the pianoroll (NUM_PITCHES, time).
+        """
+        plt.figure(figsize=(12, 4))
+        plt.imshow(piano_roll.numpy(), aspect='auto', origin='lower', cmap='hot')
+        plt.xlabel('Time Steps')
+        plt.ylabel('MIDI Notes')
+        plt.title('Piano Roll Visualization')
+        plt.colorbar(label='Velocity')
+        plt.show()
+        
 def setup_datasets_and_dataloaders(dataset_dir):
     print("Setting up datasets and dataloaders...")
     dataset = MidiDataset(dataset_dir)
