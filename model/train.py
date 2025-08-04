@@ -38,14 +38,17 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
     print(f"Using {device} device\n")
     print(f"The datset has {len(train_dataloader)} batches\n")
     for epoch in range(NUM_EPOCHS):
-        kld_anneal_epochs = 1  # The number of epochs to ramp up the weight
-        kld_max_weight = 0.5 
+        kld_anneal_epochs = 50  # The number of epochs to ramp up the weight
+        kld_max_weight = 0.01
 
         if epoch < kld_anneal_epochs:
             # Linearly increase the weight from 0 to the max value
             kld_weight = kld_max_weight * (epoch / kld_anneal_epochs)
         else:
             kld_weight = kld_max_weight
+        
+        if experiment_name:
+            experiment.log_metric("kld_weight", kld_weight, step=epoch)
 
         # Training phase
         model.train()
@@ -80,6 +83,7 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
                     print(f'\tCurrent training Loss: {avg_train_loss:.4f}')
                     print(f'\tCurrent training Reconstruction Loss: {avg_train_loss_recon:.4f}')
                     print(f'\tCurrent training KL Loss: {avg_train_loss_KL:.4f}')
+                    print(f"\t\tKL weight: {kld_weight}")
 
                     if experiment_name:
                         experiment.log_metric("batch_train_loss", avg_train_loss, step=epoch * len(train_dataloader) + batch_idx)
@@ -133,10 +137,10 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
         torch.save(model.state_dict(), f"./saved_models/progress/lofi-model_epoch{epoch+1}.pth")
 
         # Visualize some random samples reconstructed by the model
-        if verbose:
+        if verbose and epoch % 10 == 0:
             random_num = torch.randint(0, len(train_dataloader.dataset), (1,)).item()
             random_tensor, random_length = train_dataloader.dataset[random_num]
-            print(f"\nVisualizing random sample {random_num} from the training dataset:")
+            print(f"\nEpoch {epoch+1}. Visualizing random sample {random_num} from the training dataset:")
             MidiDataset.visualize_midi(random_tensor)
             print("Reconstructed sample:")
             model.reconstruct(random_tensor, random_length)

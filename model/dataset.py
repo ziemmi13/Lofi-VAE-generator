@@ -13,7 +13,7 @@ import numpy as np
 
 
 class MidiDataset(Dataset):
-    def __init__(self, dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\PROJEKT ZESPOLOWY\dataset\golden_dataset\all_songs", verbose=False):
+    def __init__(self, dataset_dir=r"C:\Users\Hyperbook\Desktop\STUDIA\SEM III\PROJEKT ZESPOLOWY\dataset\transformed_dataset_smaller", verbose=False):
         self.dataset_dir = dataset_dir
         all_midi_files = [f for f in os.listdir(dataset_dir)]
         self.df = pd.DataFrame(all_midi_files, columns=['file_name'])
