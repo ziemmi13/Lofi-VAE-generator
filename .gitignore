@@ -19,3 +19,5 @@ model/reconstructions
 generated_samples
 generated/
 reconstructed/
+midi_lstm#1/
+midi_lstm#2/

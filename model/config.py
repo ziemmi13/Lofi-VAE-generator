@@ -3,14 +3,14 @@ import pretty_midi
 # Training variables
 TRAIN_VALIDATION_SPLIT = 0.8
 BATCH_SIZE = 32
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-4
-NUM_EPOCHS = 200
-LATENT_DIM = 256
-HIDDEN_DIM = 512
+NUM_EPOCHS = 100
+LATENT_DIM = 64
+HIDDEN_DIM = 64
 LSTM_LAYERS = 2
 
-FS= 16
+FS= 10
 
 # DATASET
 MIN_MIDI_NOTE = pretty_midi.note_name_to_number('A0') # C2 (MIDI note number). This is the lowest MIDI note we will consider.
