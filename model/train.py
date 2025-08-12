@@ -39,21 +39,17 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
     print(f"The datset has {len(train_dataloader)} batches\n")
     for epoch in range(NUM_EPOCHS):
 
-        KLD_WARMUP_EPOCHS = 25  # Number of epochs with ZERO KL weight
-        kld_anneal_epochs = 50
-        kld_max_weight = 0.1
+        # --- KL WARM-UP AND ANNEALING SCHEDULE ---
+        kld_anneal_epochs = 100 # Number of epochs to ramp up the weight AFTER warm-up
 
         if epoch < KLD_WARMUP_EPOCHS:
-            kld_weight = 0.0
+            kld_weight = 0.0 # Force KL weight to be zero during warm-up
         else:
             # After warm-up, start the linear annealing
-            # Adjust the calculation to account for the warm-up period
             current_anneal_epoch = epoch - KLD_WARMUP_EPOCHS
-            kld_weight = kld_max_weight * (current_anneal_epoch / kld_anneal_epochs)
-            # Ensure weight doesn't exceed max
-            kld_weight = min(kld_weight, kld_max_weight)
+            kld_weight = KLD_MAX_WEIGHT * (current_anneal_epoch / kld_anneal_epochs)
+            kld_weight = min(kld_weight, KLD_MAX_WEIGHT) # Ensure it doesn't exceed max
 
-        
         if experiment_name:
             experiment.log_metric("kld_weight", kld_weight, step=epoch)
 

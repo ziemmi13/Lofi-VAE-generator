@@ -11,76 +11,43 @@ class Encoder(nn.Module):
         self.hidden_dim = hidden_dim
         self.z_dim = z_dim
         self.n_layers = n_layers
-
-        # The input to the LSTM will be a flattened sequence of pitches for each time step.
-        # Input features will be NUM_PITCHES
         self.lstm = nn.LSTM(
             NUM_PITCHES,
             hidden_dim,
             n_layers,
             batch_first=True,
-            bidirectional=True # Using a bidirectional LSTM is often beneficial
+            bidirectional=True
         )
-        
-        # The bidirectional LSTM output is 2 * hidden_dim
         self.fc_mean = nn.Linear(2 * hidden_dim, z_dim)
         self.fc_logvar = nn.Linear(2 * hidden_dim, z_dim)
 
     def forward(self, x, lengths):
-        # x shape: (batch_size, num_pitches, max_len)
-
-        # Reshape and permute for LSTM input
-        # We want (batch_size, seq_len, features)
-        x = x.permute(0, 2, 1) 
-        # New shape: (batch_size, max_len, num_pitches)
-
-        # Pack padded sequence to handle variable lengths
+        x = x.permute(0, 2, 1)
         packed_x = nn.utils.rnn.pack_padded_sequence(x, lengths.cpu(), batch_first=True, enforce_sorted=True)
-        
-        # LSTM forward pass
         _, (hidden, _) = self.lstm(packed_x)
-        
-        # Concatenate the hidden states from both directions of the last layer
-        # Hidden shape: (n_layers * 2, batch_size, hidden_dim)
-        # We take the last layer's hidden state
         hidden = torch.cat((hidden[-2,:,:], hidden[-1,:,:]), dim=1)
-        
-        # Get mean and log variance
         mean = self.fc_mean(hidden)
         logvar = self.fc_logvar(hidden)
-        
         return mean, logvar
 
 class Decoder(nn.Module):
     def __init__(self, z_dim, hidden_dim, n_layers):
         super(Decoder, self).__init__()
-        self.z_dim = z_dim
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers
-
-        # LSTM for decoding
         self.lstm = nn.LSTM(
             NUM_PITCHES,
             hidden_dim,
             n_layers,
             batch_first=True
         )
-        
-        # Fully connected layer to reconstruct the piano roll
         self.fc = nn.Linear(hidden_dim, NUM_PITCHES)
 
     def forward(self, x, hidden, cell):
-        # x is now the input sequence for teacher forcing
-        # hidden and cell are the initial states derived from z
-        # x shape: (batch_size, max_len, num_pitches)
-        
-        lstm_out, _ = self.lstm(x, (hidden, cell))
-        output = self.fc(lstm_out)
-        
-        # We will apply sigmoid in the main model class
-        # Permute to match target shape
-        output = output.permute(0, 2, 1)
-        return output
+        # This forward pass is now designed to be called one step at a time.
+        lstm_out, (hidden, cell) = self.lstm(x, (hidden, cell))
+        output_logits = self.fc(lstm_out)
+        return output_logits, hidden, cell
 
 class LofiModel(nn.Module):
     def __init__(self, hidden_dim=HIDDEN_DIM, latent_dim=LATENT_DIM, n_layers=LSTM_LAYERS):
@@ -88,101 +55,79 @@ class LofiModel(nn.Module):
         self.encoder = Encoder(hidden_dim, latent_dim, n_layers)
         self.decoder = Decoder(latent_dim, hidden_dim, n_layers)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.to(self.device)
-
         self.fc_latent_to_hidden = nn.Linear(latent_dim, n_layers * hidden_dim)
         self.fc_latent_to_cell = nn.Linear(latent_dim, n_layers * hidden_dim)
         self.n_layers = n_layers
         self.hidden_dim = hidden_dim
+        self.to(self.device)
 
     def reparameterize(self, mean, logvar):
-        # Standard deviation
         std = torch.exp(0.5 * logvar)
-        # Random noise
         eps = torch.randn_like(std)
-        # Sampling
         return mean + eps * std
 
     def forward(self, x, lengths):
         mean, logvar = self.encoder(x, lengths)
         z = self.reparameterize(mean, logvar)
-
-        # --- MAP Z TO DECODER'S INITIAL STATE ---
+        
         hidden_init_flat = self.fc_latent_to_hidden(z)
         cell_init_flat = self.fc_latent_to_cell(z)
-
         batch_size = x.size(0)
-        # Reshape to (n_layers, batch_size, hidden_dim)
         decoder_hidden_init = hidden_init_flat.view(self.n_layers, batch_size, self.hidden_dim)
         decoder_cell_init = cell_init_flat.view(self.n_layers, batch_size, self.hidden_dim)
+        
+        decoder_input = x.permute(0, 2, 1)
+        
+        # For efficiency, PyTorch's LSTM can process the whole sequence for teacher forcing.
+        lstm_out, _ = self.decoder.lstm(decoder_input, (decoder_hidden_init, decoder_cell_init))
+        reconstruction_logits = self.decoder.fc(lstm_out)
+        reconstruction_logits = reconstruction_logits.permute(0, 2, 1)
 
-        # --- DECODE with TEACHER FORCING ---
-        # The decoder's input should be the original sequence permuted for LSTM
-        decoder_input = x.permute(0, 2, 1) # Shape: (batch_size, max_len, num_pitches)
-        
-        reconstruction = self.decoder(decoder_input, decoder_hidden_init, decoder_cell_init)
-        
-        # Apply final activation function here
+        # *** CRITICAL FIX ***
+        # Apply sigmoid to scale the output to [0, 1], matching the normalized input data.
+        reconstruction = torch.sigmoid(reconstruction_logits)
+
         return reconstruction, mean, logvar
     
     def reconstruct(self, x, lengths):
         self.eval()
-
         lengths_tensor = torch.tensor([lengths], dtype=torch.long)
         x = x.unsqueeze(0).to(self.device)
-
         with torch.no_grad():
             reconstructed_x, _, _ = self(x, lengths_tensor)
-        
-        reconstructed_x = reconstructed_x.squeeze(0)  # Remove batch dimension
-        reconstructed_x = reconstructed_x.cpu()
+        reconstructed_x = reconstructed_x.squeeze(0).cpu()
         MidiDataset.visualize_midi(reconstructed_x)
     
     def generate(self, max_len=MAX_SEQ_LEN, visualize=True, threshold=0.01, save_path=None):
         self.eval()
         with torch.no_grad():
             z = torch.randn(1, LATENT_DIM).to(self.device)
-
-            # 2. Map z to the initial hidden and cell states for the decoder's LSTM
             hidden_init_flat = self.fc_latent_to_hidden(z)
             cell_init_flat = self.fc_latent_to_cell(z)
-            
-            # Reshape to (n_layers, batch_size=1, hidden_dim)
             hidden = hidden_init_flat.view(self.n_layers, 1, self.hidden_dim)
             cell = cell_init_flat.view(self.n_layers, 1, self.hidden_dim)
-
-            # 3. Create a "start of sequence" token. This will be a tensor of zeros.
-            # Shape: (batch_size=1, seq_len=1, features=NUM_PITCHES)
             decoder_input = torch.zeros(1, 1, NUM_PITCHES).to(self.device)
 
-            generated_sequence = []
-            # 4. Autoregressive loop
+            generated_sequence_logits = []
             for _ in range(max_len):
-                # Pass the input and the current states to the LSTM
-                lstm_out, (hidden, cell) = self.decoder.lstm(decoder_input, (hidden, cell))
+                # Call the decoder one step at a time
+                output_logits, hidden, cell = self.decoder(decoder_input, hidden, cell)
                 
-                # Get the output logits for this time step
-                output = self.decoder.fc(lstm_out)
-                output = torch.clamp(output, 0.0, 1.0)
-                
-                # The output of this step becomes the input for the next step
-                decoder_input = output
-                
-                # Store the result (removing the sequence length dimension)
-                generated_sequence.append(output.squeeze(1))
+                # Apply sigmoid to get probabilities in [0, 1] range.
+                output_probs = torch.sigmoid(output_logits)
 
-            # Stack all the generated time steps into a single tensor
-            generated_sequence = torch.stack(generated_sequence, dim=1)
-            # Permute to match the target shape: (batch, pitches, time)
+                # The ACTIVATED output becomes the input for the next time step.
+                decoder_input = output_probs
+                
+                generated_sequence_logits.append(output_logits.squeeze(1))
+
+            generated_sequence = torch.stack(generated_sequence_logits, dim=1)
+            generated_sequence = torch.sigmoid(generated_sequence)
             generated_sequence = generated_sequence.permute(0, 2, 1)
+            
+            generated_sequence = generated_sequence.squeeze(0).cpu()
+            generated_sequence[generated_sequence < threshold] = 0
 
-            # Prepare for visualization
-            generated_sequence = generated_sequence.squeeze(0)  # Remove batch dimension
-            generated_sequence = generated_sequence.cpu()
-
-            # Preprocess
-            generated_sequence = torch.clamp(generated_sequence, 0, 1)  # Ensure values are in [0, 1] range
-            generated_sequence[generated_sequence < threshold] = 0  # Apply threshold 
             if visualize:
                 MidiDataset.visualize_midi(generated_sequence)
             
@@ -190,4 +135,3 @@ class LofiModel(nn.Module):
                 pianoroll_tensor_to_midi(generated_sequence, save_path)
 
             return generated_sequence
-
