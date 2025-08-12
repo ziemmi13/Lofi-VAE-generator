@@ -163,6 +163,7 @@ class LofiModel(nn.Module):
                 
                 # Get the output logits for this time step
                 output = self.decoder.fc(lstm_out)
+                output = torch.clamp(output, 0.0, 1.0)
                 
                 # The output of this step becomes the input for the next step
                 decoder_input = output

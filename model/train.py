@@ -27,7 +27,7 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
     train_dataloader, val_dataloader = setup_datasets_and_dataloaders(dataset_dir)
     
     if early_stopping:
-        early_stopper = EarlyStopping(patience=5, path="checkpoints/best_model.pt")
+        early_stopper = EarlyStopping(patience=20, path="checkpoints/best_model.pt")
     if experiment_name:
         experiment = setup_commet_loger(experiment_name)
 
@@ -38,14 +38,21 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
     print(f"Using {device} device\n")
     print(f"The datset has {len(train_dataloader)} batches\n")
     for epoch in range(NUM_EPOCHS):
-        kld_anneal_epochs = 50  # The number of epochs to ramp up the weight
-        kld_max_weight = 0.01
 
-        if epoch < kld_anneal_epochs:
-            # Linearly increase the weight from 0 to the max value
-            kld_weight = kld_max_weight * (epoch / kld_anneal_epochs)
+        KLD_WARMUP_EPOCHS = 25  # Number of epochs with ZERO KL weight
+        kld_anneal_epochs = 50
+        kld_max_weight = 0.1
+
+        if epoch < KLD_WARMUP_EPOCHS:
+            kld_weight = 0.0
         else:
-            kld_weight = kld_max_weight
+            # After warm-up, start the linear annealing
+            # Adjust the calculation to account for the warm-up period
+            current_anneal_epoch = epoch - KLD_WARMUP_EPOCHS
+            kld_weight = kld_max_weight * (current_anneal_epoch / kld_anneal_epochs)
+            # Ensure weight doesn't exceed max
+            kld_weight = min(kld_weight, kld_max_weight)
+
         
         if experiment_name:
             experiment.log_metric("kld_weight", kld_weight, step=epoch)
@@ -74,7 +81,7 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
             train_loss_KL += loss_KL.item()
 
             if verbose:
-                if batch_idx % 10 == 0:
+                if batch_idx % 100 == 0:
                     avg_train_loss = train_loss / (batch_idx + 1)
                     avg_train_loss_recon = train_loss_reconstruction / (batch_idx + 1)
                     avg_train_loss_KL = train_loss_KL / (batch_idx + 1)
@@ -83,7 +90,7 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
                     print(f'\tCurrent training Loss: {avg_train_loss:.4f}')
                     print(f'\tCurrent training Reconstruction Loss: {avg_train_loss_recon:.4f}')
                     print(f'\tCurrent training KL Loss: {avg_train_loss_KL:.4f}')
-                    print(f"\t\tKL weight: {kld_weight}")
+                    print(f"\t\tKL weight: {kld_weight:.4f}")
 
                     if experiment_name:
                         experiment.log_metric("batch_train_loss", avg_train_loss, step=epoch * len(train_dataloader) + batch_idx)

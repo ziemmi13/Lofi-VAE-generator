@@ -9,7 +9,6 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence 
 import matplotlib.pyplot as plt
 from utils import drum_to_pianoroll
-import numpy as np
 
 
 class MidiDataset(Dataset):
@@ -113,8 +112,8 @@ def setup_datasets_and_dataloaders(dataset_dir):
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=MidiDataset.collate_fn)
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=MidiDataset.collate_fn)
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=MidiDataset.collate_fn, num_workers=12)
+    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=MidiDataset.collate_fn, num_workers=12)
 
     print("Finished setting up datasets and dataloaders.\n")
     return train_dataloader, val_dataloader
