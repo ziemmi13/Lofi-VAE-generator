@@ -1,11 +1,10 @@
 import torch
+import random
 from config import *
 from dataset import setup_datasets_and_dataloaders
 from loss import compute_loss
 from train_utils import EarlyStopping, setup_commet_loger
-from config import *
 from dataset import MidiDataset
-# from tqdm import tqdm
 
 def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_path = "./saved_models/lofi-model.pth", weights_pth=None, early_stopping=True):
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -13,7 +12,6 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
-    # Load weights if available
     if weights_pth:
         print("\n---WEIGHTS LOADING---")
         print(f"Loading weights from: {weights_pth}")
@@ -23,37 +21,37 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
         print("Succesfully loaded weights.\n")
         print('_' * 60, "\n")
 
-
     train_dataloader, val_dataloader = setup_datasets_and_dataloaders(dataset_dir)
     
     if early_stopping:
-        early_stopper = EarlyStopping(patience=20, path="checkpoints/best_model.pt")
+        early_stopper = EarlyStopping(patience=30, path="checkpoints/best_model.pt", verbose=True)
     if experiment_name:
         experiment = setup_commet_loger(experiment_name)
 
-    print("=================")
+    # Initialize teacher forcing ratio from config
+    teacher_forcing_ratio = TEACHER_FORCING_RATIO
+
+    print("\n=================")
     print("STARTING TRAINING")
-    print("=================")
+    print("=================\n")
 
     print(f"Using {device} device\n")
     print(f"The datset has {len(train_dataloader)} batches\n")
     for epoch in range(NUM_EPOCHS):
 
         # --- KL WARM-UP AND ANNEALING SCHEDULE ---
-        kld_anneal_epochs = 100 # Number of epochs to ramp up the weight AFTER warm-up
-
         if epoch < KLD_WARMUP_EPOCHS:
-            kld_weight = 0.0 # Force KL weight to be zero during warm-up
+            kld_weight = 0.0
         else:
-            # After warm-up, start the linear annealing
+            kld_anneal_epochs = 100
             current_anneal_epoch = epoch - KLD_WARMUP_EPOCHS
             kld_weight = KLD_MAX_WEIGHT * (current_anneal_epoch / kld_anneal_epochs)
-            kld_weight = min(kld_weight, KLD_MAX_WEIGHT) # Ensure it doesn't exceed max
+            kld_weight = min(kld_weight, KLD_MAX_WEIGHT)
 
         if experiment_name:
             experiment.log_metric("kld_weight", kld_weight, step=epoch)
 
-        # Training phase
+        # --- TRAINING PHASE ---
         model.train()
         train_loss, train_loss_reconstruction, train_loss_KL = 0, 0, 0
 
@@ -61,12 +59,11 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
         for batch_idx, (sequences, lengths) in enumerate(train_dataloader):
             sequences = sequences.to(device)
 
-            reconstructed_batch, mean, logvar = model(sequences, lengths)
+            # Pass the current teacher_forcing_ratio to the model's forward method
+            reconstructed_logits, mean, logvar = model(sequences, lengths, teacher_forcing_ratio)
 
-            # Compute loss
-            loss, loss_reconstruction, loss_KL = compute_loss(reconstructed_batch, sequences, mean, logvar, kld_weight=kld_weight)
+            loss, loss_reconstruction, loss_KL = compute_loss(reconstructed_logits, sequences, mean, logvar, kld_weight=kld_weight)
 
-            # Backward pass and optimization
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -76,34 +73,23 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
             train_loss_reconstruction += loss_reconstruction.item()
             train_loss_KL += loss_KL.item()
 
-            if verbose:
-                if batch_idx % 100 == 0:
-                    avg_train_loss = train_loss / (batch_idx + 1)
-                    avg_train_loss_recon = train_loss_reconstruction / (batch_idx + 1)
-                    avg_train_loss_KL = train_loss_KL / (batch_idx + 1)
+            if verbose and batch_idx > 0 and batch_idx % 100 == 0:
+                avg_train_loss = train_loss / (batch_idx + 1)
+                avg_train_loss_recon = train_loss_reconstruction / (batch_idx + 1)
+                avg_train_loss_KL = train_loss_KL / (batch_idx + 1)
 
-                    print(f'\tBatch index: {batch_idx+1}/{len(train_dataloader)}')
-                    print(f'\tCurrent training Loss: {avg_train_loss:.4f}')
-                    print(f'\tCurrent training Reconstruction Loss: {avg_train_loss_recon:.4f}')
-                    print(f'\tCurrent training KL Loss: {avg_train_loss_KL:.4f}')
-                    print(f"\t\tKL weight: {kld_weight:.4f}")
+                print(f'\tBatch index: {batch_idx+1}/{len(train_dataloader)}')
+                print(f'\tCurrent training Loss: {avg_train_loss:.4f}')
+                print(f'\tCurrent training Reconstruction Loss: {avg_train_loss_recon:.4f}')
+                print(f'\tCurrent training KL Loss: {avg_train_loss_KL:.4f}')
+                print(f"\t\tKL weight: {kld_weight:.4f}")
 
-                    if experiment_name:
-                        experiment.log_metric("batch_train_loss", avg_train_loss, step=epoch * len(train_dataloader) + batch_idx)
-                        experiment.log_metric("batch_train_loss_reconstruction", avg_train_loss_recon, step=epoch * len(train_dataloader) + batch_idx)
-                        experiment.log_metric("batch_train_loss_KL", avg_train_loss_KL, step=epoch * len(train_dataloader) + batch_idx)
-                    
-
-        epoch_loss = train_loss / len(train_dataloader)
-        epoch_reconstruction_loss = train_loss_reconstruction / len(train_dataloader)
-        epoch_KL = train_loss_KL / len(train_dataloader)
-        # Log epoch metrics
-        if experiment_name:
-            experiment.log_metric("epoch_train_loss", epoch_loss, step=epoch)
-            experiment.log_metric("epoch_train_loss_reconstruction", epoch_reconstruction_loss, step=epoch)
-            experiment.log_metric("epoch_train_loss_KL", epoch_KL, step=epoch)
-
-        # Validation phase
+                if experiment_name:
+                    experiment.log_metric("batch_train_loss", avg_train_loss, step=epoch * len(train_dataloader) + batch_idx)
+                    experiment.log_metric("batch_train_loss_reconstruction", avg_train_loss_recon, step=epoch * len(train_dataloader) + batch_idx)
+                    experiment.log_metric("batch_train_loss_KL", avg_train_loss_KL, step=epoch * len(train_dataloader) + batch_idx)
+                        
+        # --- VALIDATION PHASE ---
         model.eval()
         val_loss, val_loss_reconstruction, val_loss_KL = 0, 0, 0
         print("Validating:")
@@ -111,10 +97,10 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
             for batch_idx, (sequences, lengths) in enumerate(val_dataloader):
                 sequences = sequences.to(device)
 
-                reconstructed_batch, mean, logvar = model(sequences, lengths)
+                # During validation, turn off teacher forcing (ratio=0.0) to get a true measure of performance
+                reconstructed_logits, mean, logvar = model(sequences, lengths, 0.0)
 
-                # Compute loss
-                loss, loss_reconstruction, loss_KL = compute_loss(reconstructed_batch, sequences, mean, logvar, kld_weight=kld_weight)
+                loss, loss_reconstruction, loss_KL = compute_loss(reconstructed_logits, sequences, mean, logvar, kld_weight=kld_weight)
 
                 val_loss += loss.item()
                 val_loss_reconstruction += loss_reconstruction.item()
@@ -128,15 +114,16 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
             print(f'Validation Reconstruction Loss: {val_epoch_reconstruction_loss:.4f}')
             print(f'Validation KL Loss: {val_epoch_KL_loss:.4f}')
             print(f'Validation Loss: {val_epoch_loss:.4f}')
+            print(f"\t\tKL weight: {kld_weight:.4f}")
+            print(f"\t\tTeacher forcing ratio: {teacher_forcing_ratio:.4f}")
             print('_' * 60, "\n")
 
-        # Log validation metrics
         if experiment_name:
             experiment.log_metric("val_loss", val_epoch_loss, step=epoch)
             experiment.log_metric("epoch_val_loss_reconstruction", val_epoch_reconstruction_loss, step=epoch)
             experiment.log_metric("epoch_val_loss_KL", val_epoch_KL_loss, step=epoch)
+            experiment.log_metric("teacher_forcing_ratio", teacher_forcing_ratio, step=epoch)
 
-        # Save model progress
         torch.save(model.state_dict(), f"./saved_models/progress/lofi-model_epoch{epoch+1}.pth")
 
         # Visualize some random samples reconstructed by the model
@@ -149,23 +136,20 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
             model.reconstruct(random_tensor, random_length)
             print('_' * 60, "\n")
 
-        # Early stopping and saving the trained model
         if early_stopping:
             early_stopper(val_epoch_loss, model)
             if early_stopper.early_stop:
                 print("Early stopping triggered.")
                 break
 
-    torch.save(model.state_dict(), model_save_path)
+        # Gently decay teacher forcing ratio for the next epoch
+        if teacher_forcing_ratio > 0.1: # Don't let it decay to zero completely
+            teacher_forcing_ratio *= 0.995 
 
+    torch.save(model.state_dict(), model_save_path)
     print("TRAINING FINISHED")
     print("===================")
     print(f"Best model was saved to: {model_save_path}")
 
-    # End the Comet experiment
     if experiment_name:
         experiment.end()
-
-
-
-
