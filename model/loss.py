@@ -6,17 +6,13 @@ def compute_loss(recon_logits, x, mean, logvar, kld_weight=1.0):
     Computes the VAE loss using Binary Cross-Entropy with Logits.
     This is more numerically stable than a separate Sigmoid followed by BCE.
     """
-    # --- MODIFIED RECONSTRUCTION LOSS ---
-    # We now use BCEWithLogitsLoss. This takes the raw output of the model (logits)
-    # before the sigmoid activation. It's more numerically stable and efficient.
+
     recon_loss = F.binary_cross_entropy_with_logits(recon_logits, x, reduction='sum')
 
     # KL-Divergence remains the same.
     kl_div = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
     
     # Combine the two terms.
-    # We can remove the RECONSTRUCTION_WEIGHT for now and control the balance
-    # purely with the kld_weight, as BCE has a different scale than MSE.
     total_loss = recon_loss + (kld_weight * kl_div)
     
     # Normalize by batch size for consistent logging.

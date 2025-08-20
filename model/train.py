@@ -136,7 +136,7 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
             model.reconstruct(random_tensor, random_length)
             print('_' * 60, "\n")
 
-        if early_stopping:
+        if early_stopping and epoch > 40:
             early_stopper(val_epoch_loss, model)
             if early_stopper.early_stop:
                 print("Early stopping triggered.")
