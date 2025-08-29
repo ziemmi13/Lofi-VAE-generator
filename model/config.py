@@ -3,14 +3,14 @@ import pretty_midi
 # Training variables
 TRAIN_VALIDATION_SPLIT = 0.8
 BATCH_SIZE = 32
-LEARNING_RATE = 3e-4
-WEIGHT_DECAY = 1e-5
+LEARNING_RATE = 1e-3
+WEIGHT_DECAY = 1e-4
 NUM_EPOCHS = 200
 
 # Model parameters
-LATENT_DIM = 128     
+LATENT_DIM = 64      
 HIDDEN_DIM = 256     
-LSTM_LAYERS = 1   
+LSTM_LAYERS = 1     
 
 # Loss parameters
 KLD_MAX_WEIGHT = 0.02

@@ -31,7 +31,7 @@ class EarlyStopping:
             print(f"Validation loss decreased. Saving model to {self.path}")
 
 
-def setup_commet_loger(experiment_name, project_name="LOFI-VAE-generator"):
+def setup_commet_loger(experiment_name, project_name="LOFI-VAE"):
     experiment = Experiment(
         api_key=os.getenv("COMET_API_KEY"),
         project_name=project_name

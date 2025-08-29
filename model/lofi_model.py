@@ -151,5 +151,8 @@ class LofiModel(nn.Module):
         with torch.no_grad():
             reconstructed_logits, _, _ = self(x, lengths_tensor, 0.0) # No teacher forcing
         reconstructed_x = torch.sigmoid(reconstructed_logits)
+        reconstructed_x[reconstructed_x < 0.01] = 0
         reconstructed_x = reconstructed_x.squeeze(0).cpu()
         MidiDataset.visualize_midi(reconstructed_x)
+
+        return reconstructed_x
