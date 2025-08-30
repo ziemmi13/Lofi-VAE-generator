@@ -6,7 +6,7 @@ from loss import compute_loss
 from train_utils import EarlyStopping, setup_commet_loger
 from dataset import MidiDataset
 
-def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_path = "./saved_models/lofi-model.pth", weights_pth=None, early_stopping=True):
+def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_path = "./saved_models/lofi-model.pth", weights_pth=None, early_stopping=True, previous_epoch_count=0):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
@@ -19,6 +19,7 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
         model.load_state_dict(weights)
         model.to(device)
         print("Succesfully loaded weights.\n")
+        print(f"Starting from epoch {previous_epoch_count}")
         print('_' * 60, "\n")
 
     train_dataloader, val_dataloader = setup_datasets_and_dataloaders(dataset_dir)
@@ -40,8 +41,8 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
     for epoch in range(NUM_EPOCHS):
 
         # --- KL WARM-UP AND ANNEALING SCHEDULE ---
-        if epoch < KLD_WARMUP_EPOCHS:
-            kld_weight = 0.0
+        if epoch <= KLD_WARMUP_EPOCHS:
+            kld_weight = 0.02
         else:
             kld_anneal_epochs = 100
             current_anneal_epoch = epoch - KLD_WARMUP_EPOCHS
@@ -55,7 +56,7 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
         model.train()
         train_loss, train_loss_reconstruction, train_loss_KL = 0, 0, 0
 
-        print(f'Epoch [{epoch + 1}/{NUM_EPOCHS}]')
+        print(f'Epoch [{epoch + 1 + previous_epoch_count}/{NUM_EPOCHS}]')
         for batch_idx, (sequences, lengths) in enumerate(train_dataloader):
             sequences = sequences.to(device)
 
@@ -124,7 +125,7 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
             experiment.log_metric("epoch_val_loss_KL", val_epoch_KL_loss, step=epoch)
             experiment.log_metric("teacher_forcing_ratio", teacher_forcing_ratio, step=epoch)
 
-        torch.save(model.state_dict(), f"./saved_models/progress/lofi-model_epoch{epoch+1}.pth")
+        torch.save(model.state_dict(), f"./saved_models/progress/lofi-model_epoch{epoch+1+previous_epoch_count}.pth")
 
         # Visualize some random samples reconstructed by the model
         if verbose and epoch % 10 == 0:
@@ -143,7 +144,7 @@ def train(model, dataset_dir, experiment_name=None, verbose=True, model_save_pat
                 break
 
         # Gently decay teacher forcing ratio for the next epoch
-        if teacher_forcing_ratio > 0.1: # Don't let it decay to zero completely
+        if teacher_forcing_ratio > 0.001: # Don't let it decay to zero completely
             teacher_forcing_ratio *= 0.995 
 
     torch.save(model.state_dict(), model_save_path)

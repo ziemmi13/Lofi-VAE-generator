@@ -5,7 +5,7 @@ TRAIN_VALIDATION_SPLIT = 0.8
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-4
-NUM_EPOCHS = 200
+NUM_EPOCHS = 400
 
 # Model parameters
 LATENT_DIM = 64      
@@ -13,12 +13,12 @@ HIDDEN_DIM = 256
 LSTM_LAYERS = 1     
 
 # Loss parameters
-KLD_MAX_WEIGHT = 0.02
-KLD_WARMUP_EPOCHS = 40
+KLD_MAX_WEIGHT = 0.1
+KLD_WARMUP_EPOCHS = 0
 
 # --- NEW: Scheduled Sampling Parameter ---
 # Start with 100% teacher forcing and slowly decay
-TEACHER_FORCING_RATIO = 1.0 
+TEACHER_FORCING_RATIO = 0.1353 
 
 FS= 10
 

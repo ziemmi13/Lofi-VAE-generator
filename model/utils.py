@@ -46,7 +46,7 @@ def pianoroll_to_instrument(piano_roll, fs, program=0):
     
     notes, frames = piano_roll.shape
     piano_roll = np.pad(piano_roll, [(0, 0), (0, 1)], 'constant')
-    velocity_threshold = 10 
+    velocity_threshold = 0 
 
     for pitch in range(notes):
         # Find the frames where this pitch is active
